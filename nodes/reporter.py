@@ -219,4 +219,6 @@ _Báo cáo được tạo tự động bởi Multi-Agent Pipeline_
     history.append({"iteration": state["iteration"], "node": "REPORTER", "content": report_path})
 
     # ← Chỉ trả về field thay đổi
-    return {"history": history}
+    return {
+    "history": [{"iteration": iteration, "node": "INTEGRATOR", "content": f"saved to {folder}"}]
+}

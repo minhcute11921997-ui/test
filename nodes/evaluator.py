@@ -19,7 +19,6 @@ def evaluator_node(state: AgentState) -> dict:
     ui_ok = state["feedback_ui"].get("status") == "ok"
     db_ok = state["feedback_db"].get("status") == "ok"
 
-    history = state.get("history", [])
 
     if ui_ok and db_ok:
         print(f"\n{'🟢'*25}")
@@ -55,13 +54,11 @@ Return ONLY JSON:
         all_good = False
         log_step(iteration, "EVALUATOR", f"⚠️ Cần sửa:\n{new_plan}")
 
-    save_log(history)
-    history.append({"iteration": iteration, "node": "EVALUATOR", "content": status})
-
+    save_log(state.get("history", []))
     # ← Chỉ trả về field thay đổi
     return {
-        "all_good": all_good,
-        "new_plan": new_plan,
-        "status":   status,
-        "history":  history,
-    }
+    "all_good": all_good,
+    "new_plan": new_plan,
+    "status":   status,
+    "history": [{"iteration": iteration, "node": "EVALUATOR", "content": status}],
+}

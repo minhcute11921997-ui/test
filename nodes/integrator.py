@@ -40,4 +40,6 @@ DB Feedback: {state['feedback_db']}
     history.append({"iteration": iteration, "node": "INTEGRATOR", "content": f"saved to {folder}"})
 
     # ← Chỉ trả về field thay đổi
-    return {"history": history}
+    return {
+    "history": [{"iteration": iteration, "node": "INTEGRATOR", "content": f"saved to {folder}"}]
+}

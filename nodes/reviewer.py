@@ -50,9 +50,9 @@ def _check_pylint(code: str, task_type: str) -> list:
         )
 
         if result.stdout.strip():
+            ERROR_CODES = ["E0", "E1", "F0", "error"]
             for line in result.stdout.strip().split("\n"):
-                # Chỉ lấy dòng có lỗi thật
-                if any(code in line for code in ["E0", "E1", "F0", "error"]):
+                if any(err_code in line for err_code in ERROR_CODES):
                     clean = line.strip()
                     if clean:
                         issues.append(clean)
@@ -221,10 +221,11 @@ def reviewer_node(state: AgentState) -> dict:
 
     # ← Chỉ trả về field thay đổi
     return {
-        "feedback_ui": feedback_ui,
-        "feedback_db": feedback_db,
-        "history":     history,
-    }
+    "feedback_ui": feedback_ui,
+    "feedback_db": feedback_db,
+    "history": [{"iteration": iteration, "node": "REVIEWER",
+                 "content": {"feedback_ui": feedback_ui, "feedback_db": feedback_db}}],
+}
 
 
 def _print_review_result(task_type: str, feedback: dict):

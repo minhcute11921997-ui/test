@@ -44,8 +44,8 @@ def human_gate_node(state: AgentState) -> dict:
 
     # ← Chỉ trả về field thay đổi
     return {
-        "status":            status,
-        "human_decision":    human_decision,
-        "extra_requirement": extra_requirement,
-        "history":           history,
-    }
+    "status":            status,
+    "human_decision":    human_decision,
+    "extra_requirement": extra_requirement,
+    "history": [{"iteration": iteration, "node": "HUMAN GATE", "content": human_decision}],
+}

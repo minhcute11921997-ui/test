@@ -199,7 +199,7 @@ def context_loader_node(state: AgentState) -> AgentState:
     # ── Kiểm tra có gì không ──
     if not spec and not code_files and not db_context:
         log_step(0, "CONTEXT LOADER", "⏭️  Không có context — chạy từ đầu")
-        return state
+        return {}
 
     # ── LLM tóm tắt toàn bộ context ──
     print("\n🧠 LLM đang phân tích context...")
@@ -210,18 +210,6 @@ def context_loader_node(state: AgentState) -> AgentState:
         user_request = state["user_request"]
     )
 
-    # Lưu vào state
-    state["project_spec"]    = spec
-    state["existing_code"]   = code_files
-    state["context_summary"] = summary
-
-    # Lưu thêm db_info vào history để reporter dùng
-    state = log_to_history(state, "CONTEXT LOADER", {
-        "summary":  summary,
-        "db_tables": db_info.get("tables", []),
-        "db_schemas": db_info.get("schemas", {}),
-    })
-
     log_step(0, "CONTEXT LOADER",
              f"✅ Đọc xong\n"
              f"   Spec files : {len(spec)} ký tự\n"
@@ -229,4 +217,15 @@ def context_loader_node(state: AgentState) -> AgentState:
              f"   DB tables  : {db_info.get('tables', [])}\n\n"
              f"Tóm tắt:\n{summary}")
 
-    return state
+    return {
+        "project_spec":    spec,
+        "existing_code":   code_files,
+        "context_summary": summary,
+        "db_tables":       db_info.get("tables", []),
+        "db_schemas":      db_info.get("schemas", {}),
+        "history": [{
+            "iteration": 0,
+            "node": "CONTEXT LOADER",
+            "content": {"summary": summary}
+        }],
+    }

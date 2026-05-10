@@ -78,8 +78,9 @@ Return ONLY this JSON structure, no explanation:
 
     # ← Chỉ trả về field thay đổi
     return {
-        "iteration":     iteration,
-        "current_plan":  plan,
-        "original_plan": original_plan,
-        "history":       history,
-    }
+    "iteration":     iteration,
+    "current_plan":  plan,
+    "original_plan": original_plan,
+    "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
+    # ← list chỉ có 1 item mới, LangGraph tự nối vào
+}
