@@ -8,7 +8,7 @@ from memory.memory_manager import load_template, load_relevant_patterns
 from nodes.task_config import TASK_TYPES, COMPLEXITY_HINTS
 
 llm = OllamaLLM(
-    model="qwen2.5:14b",
+    model="qwen3.5:9b",
     format="json",
     temperature=0.1,
 )

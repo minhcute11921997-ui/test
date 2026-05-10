@@ -6,7 +6,7 @@ from nodes.task_config import TASK_TYPES
 
 
 llm = OllamaLLM(
-    model="qwen2.5:14b",
+    model="deepseek-r1:14b",
     format="json",
     temperature=0.1,
 )

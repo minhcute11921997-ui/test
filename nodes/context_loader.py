@@ -7,7 +7,7 @@ from utils import log_step, parse_json_safe
 import sqlite3
 
 llm = OllamaLLM(
-    model="qwen2.5:14b",
+    model="qwen3.5:9b",
     temperature=0.1,
 )
 

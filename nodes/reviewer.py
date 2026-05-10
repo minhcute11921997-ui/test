@@ -10,7 +10,7 @@ from memory.memory_manager import load_relevant_patterns
 from nodes.task_config import TASK_TYPES
 
 llm = OllamaLLM(
-    model="qwen2.5:14b",
+    model="deepseek-r1:14b",
     format="json",
     temperature=0.1,
 )
