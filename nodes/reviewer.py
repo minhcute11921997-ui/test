@@ -6,6 +6,7 @@ import os
 from langchain_ollama import OllamaLLM
 from state import AgentState, log_to_history
 from utils import parse_json_safe, log_step
+from memory.memory_manager import load_relevant_patterns
 
 llm = OllamaLLM(
     model="qwen2.5:14b",
@@ -101,6 +102,20 @@ def _static_check(code: str, task_type: str) -> dict:
 
 def _llm_review(code: str, task_type: str) -> dict:
     """LLM đọc code và nhận xét — chạy sau khi syntax đã ok"""
+
+    # ── Đọc pattern hay gặp từ memory ───────────────────────
+    known_patterns  = load_relevant_patterns(task_type)
+    pattern_hint    = ""
+
+    if known_patterns:
+        lines = ["KNOWN ISSUES TO WATCH FOR (từ các lần chạy trước):"]
+        for p in known_patterns:
+            fix_text = f" → Fix: {p['fix']}" if p.get("fix") else ""
+            lines.append(f"  - [{p['seen_count']}x] {p['issue']}{fix_text}")
+        pattern_hint = "\n".join(lines)
+        print(f"  📚 Loaded {len(known_patterns)} known patterns cho {task_type}")
+    # ────────────────────────────────────────────────────────
+    
     prompt = f"""
 You are a senior Python code reviewer.
 Review this {task_type} code carefully.

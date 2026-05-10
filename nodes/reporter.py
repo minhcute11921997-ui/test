@@ -4,6 +4,7 @@ from datetime import datetime
 from langchain_ollama import OllamaLLM
 from state import AgentState, log_to_history
 from utils import log_step
+from memory.memory_manager import save_template, save_patterns
 
 llm = OllamaLLM(
     model="qwen2.5:14b",
@@ -71,6 +72,8 @@ def _quality_table(state: AgentState) -> str:
                         rows.append(f"| {iteration} | {task_type} | {syntax} | {pylint} | {llm_r} | {score}/10 | {status} |")
 
     return "\n".join(rows)
+
+
 
 
 def _issues_section(state: AgentState) -> str:
@@ -215,6 +218,19 @@ _Báo cáo được tạo tự động bởi Multi-Agent Pipeline_
         f.write(report)
 
     log_step(state["iteration"], "REPORTER", f"✅ Báo cáo đã lưu: {report_path}")
+
+     # ── Lưu memory nếu pipeline thành công ──────────────────
+    if state["status"] == "done":
+        print("\n  🧠 Lưu memory...")
+        save_template(
+            request = state["user_request"],
+            plan    = state["current_plan"],
+        )
+        save_patterns(
+            history = state["history"],   # ← toàn bộ history các vòng
+        )
+        print("  ✅ Memory đã cập nhật")
+    # ────────────────────────────────────────────────────────
     history = state.get("history", [])
     history.append({"iteration": state["iteration"], "node": "REPORTER", "content": report_path})
 

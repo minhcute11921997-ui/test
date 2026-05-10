@@ -1,7 +1,10 @@
 # nodes/planner.py
+import json
+
 from langchain_ollama import OllamaLLM
 from state import AgentState, log_to_history
 from utils import parse_json_safe, log_step
+from memory.memory_manager import load_template, load_relevant_patterns
 
 llm = OllamaLLM(
     model="qwen2.5:14b",
@@ -11,6 +14,20 @@ llm = OllamaLLM(
 
 def planner_node(state: AgentState) -> dict:
     iteration = state["iteration"] + 1
+
+    # ── Đọc memory ──────────────────────────────
+    memory_plan = None
+    if iteration == 1:   # Chỉ dùng memory ở vòng đầu
+        memory_plan = load_template(state["user_request"])
+
+    memory_hint = ""
+    if memory_plan:
+        memory_hint = f"""
+MEMORY — Template từ lần chạy trước:
+{json.dumps(memory_plan, ensure_ascii=False, indent=2)}
+
+Hãy dùng template này làm base, chỉnh sửa nếu cần.
+"""
 
     extra = ""
     if state.get("extra_requirement"):
@@ -39,6 +56,7 @@ You are a software project planner.
 User request: "{state['user_request']}"
 {context_block}
 {db_block}
+{memory_hint}
 {extra}
 
 Important:
