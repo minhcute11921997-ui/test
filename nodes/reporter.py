@@ -236,5 +236,5 @@ _Báo cáo được tạo tự động bởi Multi-Agent Pipeline_
 
     # ← Chỉ trả về field thay đổi
     return {
-    "history": [{"iteration": iteration, "node": "INTEGRATOR", "content": f"saved to {folder}"}]
+    "history": history
 }
