@@ -6,7 +6,7 @@ from utils import log_step, save_code, clean_code
 from nodes.task_config import TASK_TYPES
 
 llm_coder = OllamaLLM(
-    model="qwen2.5-coder:7b",
+    model="deepseek-coder-v2",
     temperature=0.1,
     stop=["```", "Hope", "Sure", "Note:", "Explanation:"],
 )
