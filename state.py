@@ -48,6 +48,9 @@ class AgentState(TypedDict):
     # ── Danh sách task type thực tế ở vòng này ───────────────
     active_task_types: list  # ← thêm: ["UI","DB"] hoặc ["UI","DB","API","AUTH"]
 
+    test_results: dict    # kết quả chi tiết từng lớp
+    test_issues:  list    # danh sách lỗi → tester trả về để graph routing
+
 def create_initial_state(user_request: str) -> AgentState:
     """Tạo state ban đầu khi bắt đầu pipeline"""
     return AgentState(
