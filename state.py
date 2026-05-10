@@ -15,10 +15,16 @@ class AgentState(TypedDict):
     # ── Output của các Coder ──────────────────────
     code_ui: str                # Code UI từ Coder A
     code_db: str                # Code DB từ Coder B
+    code_api:  str    
+    code_auth: str    
+    code_test: str    
 
     # ── Feedback từ Reviewer ──────────────────────
     feedback_ui: dict           # {"status": "ok/error", "comment": "..."}
     feedback_db: dict
+    feedback_api:  dict    # ← thêm
+    feedback_auth: dict    # ← thêm
+    feedback_test: dict  
 
     # ── Quyết định từ Evaluator ───────────────────
     all_good: bool              # True = hoàn thành
@@ -39,6 +45,8 @@ class AgentState(TypedDict):
     # ── DB context ────────────────────────────────────────────
     db_tables:  list    # ["users", "tasks", ...]
     db_schemas: dict    # {"users": {"id": "int", "name": "str"}, ...}
+    # ── Danh sách task type thực tế ở vòng này ───────────────
+    active_task_types: list  # ← thêm: ["UI","DB"] hoặc ["UI","DB","API","AUTH"]
 
 def create_initial_state(user_request: str) -> AgentState:
     """Tạo state ban đầu khi bắt đầu pipeline"""
@@ -52,9 +60,17 @@ def create_initial_state(user_request: str) -> AgentState:
 
         code_ui="",
         code_db="",
+        code_api   = "",
+        code_auth  = "",
+        code_test  = "",
 
         feedback_ui={},
         feedback_db={},
+        feedback_api  = {},
+        feedback_auth = {},
+        feedback_test = {},
+
+        active_task_types = [],
 
         all_good=False,
         new_plan={},

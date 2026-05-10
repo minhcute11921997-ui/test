@@ -2,6 +2,7 @@
 from langchain_ollama import OllamaLLM
 from state import AgentState, log_to_history
 from utils import log_step, save_code
+from nodes.task_config import TASK_TYPES
 
 llm_coder = OllamaLLM(
     model="qwen2.5-coder:7b",
@@ -10,29 +11,27 @@ llm_coder = OllamaLLM(
 
 def _run_coder(state: AgentState, task_type: str) -> str:
     iteration = state["iteration"]
-    plan = state["current_plan"]
+    plan      = state["current_plan"]
 
     task = next(
         (t for t in plan.get("tasks", []) if t["type"] == task_type),
         {"name": task_type, "description": f"Build {task_type}"}
     )
 
-    # ── Lấy code cũ và feedback từ vòng trước ──
-    prev_code = ""
-    prev_feedback = {}
+    # ── Lấy field động từ task_config ───────────────────────
+    config       = TASK_TYPES.get(task_type, {})
+    code_field   = config.get("state_field",    f"code_{task_type.lower()}")
+    fb_field     = config.get("feedback_field", f"feedback_{task_type.lower()}")
+
+    prev_code     = state.get(code_field, "")
+    prev_feedback = state.get(fb_field, {})
+    # ────────────────────────────────────────────────────────
+
     fix_instruction = ""
-
-    if task_type == "UI" and state.get("code_ui"):
-        prev_code = state["code_ui"]
-        prev_feedback = state.get("feedback_ui", {})
-    elif task_type == "DB" and state.get("code_db"):
-        prev_code = state["code_db"]
-        prev_feedback = state.get("feedback_db", {})
-
-    # Lấy hướng dẫn fix từ Evaluator
     new_plan = state.get("new_plan", {})
     if new_plan:
         fix_instruction = new_plan.get(f"fix_{task_type.lower()}", "")
+
 
     # ── Xây dựng prompt theo tình huống ──
     if prev_code and prev_feedback.get("status") == "error":
@@ -153,3 +152,31 @@ def coder_b_node(state: AgentState) -> dict:
             "content": "DB code generated",
         }],
     }
+
+def make_coder_node(task_type: str):
+    """Factory tạo coder node cho bất kỳ task type nào"""
+    def coder_node(state: AgentState) -> dict:
+        if state["status"] == "stopped":
+            return {}
+
+        code = _run_coder(state, task_type)
+
+        config     = TASK_TYPES.get(task_type, {})
+        code_field = config.get("state_field", f"code_{task_type.lower()}")
+
+        return {
+            code_field: code,
+            "history": [{"iteration": state["iteration"],
+                         "node": f"CODER {task_type}",
+                         "content": f"{task_type} code generated"}],
+        }
+    coder_node.__name__ = f"coder_{task_type.lower()}_node"
+    return coder_node
+
+
+# Tạo sẵn các node chuẩn
+coder_a_node    = make_coder_node("UI")
+coder_b_node    = make_coder_node("DB")
+coder_api_node  = make_coder_node("API")
+coder_auth_node = make_coder_node("AUTH")
+coder_test_node = make_coder_node("TEST")
