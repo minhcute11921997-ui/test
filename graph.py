@@ -103,7 +103,6 @@ def build_graph():
     # Edges sau reviewer
     graph.add_edge("reviewer",   "integrator")
     graph.add_edge("integrator", "evaluator")
-    graph.add_edge("evaluator",  "reporter")
 
     graph.add_conditional_edges(
         "evaluator",

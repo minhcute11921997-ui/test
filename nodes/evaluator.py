@@ -59,6 +59,7 @@ def _generate_smart_fix_plan(
     state:            AgentState,
     active_types:     list,
     feedback_results: dict,
+    iteration:        int,  
 ) -> dict:
     """
     Sinh fix plan cụ thể bằng cách cho LLM thấy:
@@ -191,6 +192,7 @@ def evaluator_node(state: AgentState) -> dict:
             state            = state,
             active_types     = active_types,
             feedback_results = feedback_results,
+            iteration        = iteration,
         )
 
         # In fix plan ra màn hình cho dễ đọc
