@@ -12,6 +12,8 @@ from nodes.evaluator  import evaluator_node
 from nodes.human_gate import human_gate_node
 from nodes.context_loader import context_loader_node
 from nodes.reporter  import reporter_node
+from nodes.tester import tester_node
+
 
 # Map type → node
 CODER_NODES = {
@@ -34,23 +36,30 @@ def route_to_first_coder(state: AgentState) -> str:
 def route_between_coders(task_type: str):
     """
     Sau mỗi coder → đi đến coder tiếp theo,
-    hoặc reviewer nếu đã hết.
+    hoặc tester nếu đã hết.
     """
     def _route(state: AgentState) -> str:
         types = state.get("active_task_types", ["UI", "DB"])
         try:
             idx = types.index(task_type)
         except ValueError:
-            return "reviewer"
+            return "tester"
 
         next_idx = idx + 1
         if next_idx >= len(types):
-            return "reviewer"  # Đã chạy hết tất cả coder
+            return "tester"  # Đã chạy hết tất cả coder → vào tester
 
-        next_type      = types[next_idx]
-        next_node, _   = CODER_NODES.get(next_type, ("reviewer", None))
+        next_type    = types[next_idx]
+        next_node, _ = CODER_NODES.get(next_type, ("tester", None))
         return next_node
     return _route
+
+
+def route_after_tester(state: AgentState) -> str:
+    """Nếu tester phát hiện lỗi → quay lại planner, không thì tiếp tục reviewer"""
+    if state.get("test_issues"):
+        return "retry"
+    return "pass"
 
 
 def should_continue(state: AgentState) -> str:
@@ -69,6 +78,7 @@ def build_graph():
     graph.add_node("context_loader", context_loader_node)
     graph.add_node("planner",        planner_node)
     graph.add_node("human_gate",     human_gate_node)
+    graph.add_node("tester",         tester_node)       # ← thêm mới
     graph.add_node("reviewer",       reviewer_node)
     graph.add_node("integrator",     integrator_node)
     graph.add_node("evaluator",      evaluator_node)
@@ -81,7 +91,7 @@ def build_graph():
     # Edges cố định
     graph.set_entry_point("context_loader")
     graph.add_edge("context_loader", "planner")
-    graph.add_edge("planner", "human_gate")
+    graph.add_edge("planner",        "human_gate")
 
     # human_gate → coder đầu tiên (động)
     graph.add_conditional_edges(
@@ -90,20 +100,28 @@ def build_graph():
         {node_name: node_name for _, (node_name, _) in CODER_NODES.items()},
     )
 
-    # Mỗi coder → coder tiếp theo hoặc reviewer (động)
+    # Mỗi coder → coder tiếp theo hoặc tester (động)
     for type_name, (node_name, _) in CODER_NODES.items():
         next_nodes = {n: n for _, (n, _) in CODER_NODES.items()}
-        next_nodes["reviewer"] = "reviewer"
+        next_nodes["tester"] = "tester"                 # ← đổi "reviewer" → "tester"
         graph.add_conditional_edges(
             node_name,
             route_between_coders(type_name),
             next_nodes,
         )
 
+    # tester → reviewer (pass) hoặc planner (retry nếu có lỗi)
+    graph.add_conditional_edges(
+        "tester",
+        route_after_tester,
+        {"retry": "planner", "pass": "reviewer"},
+    )
+
     # Edges sau reviewer
     graph.add_edge("reviewer",   "integrator")
     graph.add_edge("integrator", "evaluator")
 
+    # ← BỎ add_edge("evaluator", "reporter") — chỉ dùng conditional
     graph.add_conditional_edges(
         "evaluator",
         should_continue,
