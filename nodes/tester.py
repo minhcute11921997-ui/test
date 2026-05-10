@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from langchain_ollama import OllamaLLM
 from state import AgentState
 from utils import log_step
@@ -10,6 +11,7 @@ from utils import log_step
 llm = OllamaLLM(
     model="qwen2.5:14b",
     temperature=0.1,
+    num_predict=1024,
 )
 
 
@@ -68,14 +70,34 @@ def check_pylint(code: str, label: str) -> list:
         for l in result.stdout.splitlines()
         if re.search(r"\s[WE]\d{4}:", l)
     ]
-    return lines[:5]  # giới hạn 5 dòng
+    return lines[:5]
 
 
 # ══════════════════════════════════════════════
-# LỚP 3 — PYTEST (LLM sinh test + chạy thật)
+# LỚP 3 — PYTEST
 # ══════════════════════════════════════════════
 
-def generate_test_code(source_code: str, label: str) -> str:
+def generate_fallback_test(source_code: str) -> str:
+    """Sinh test tối thiểu không cần LLM — dựa trên def có trong code"""
+    funcs = re.findall(r"^def (\w+)\(", source_code, re.MULTILINE)
+    lines = [
+        "import sqlite3",
+        "import sys, os",
+        "sys.path.insert(0, os.path.dirname(__file__))",
+        "import module",
+        "",
+    ]
+    if not funcs:
+        lines.append("def test_module_imports(): pass")
+    else:
+        for func in funcs[:5]:
+            lines.append(f"def test_{func}_exists():")
+            lines.append(f"    assert hasattr(module, '{func}'), '{func} not found'")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def generate_test_code_llm(source_code: str, label: str) -> str:
     prompt = f"""You are a Python test engineer. Write pytest test cases for the code below.
 
 STRICT RULES:
@@ -85,19 +107,45 @@ STRICT RULES:
 4. Test edge cases: None input, price=0, stock=0, missing dict key
 5. For Flask app use app.test_client()
 6. Every test must have at least one assert
-7. Return ONLY valid Python pytest code — no markdown, no explanation
+7. Return ONLY valid Python code inside ```python ... ``` block
 
 CODE ({label}):
-{source_code}
+{source_code[:1500]}
 """
-    raw = llm.invoke(prompt)
+    raw   = llm.invoke(prompt)
     match = re.search(r"```(?:python)?\s*\n(.*?)```", raw, re.DOTALL)
     return match.group(1).strip() if match else raw.strip()
 
 
+def generate_test_code(source_code: str, label: str, timeout: int = 60) -> str:
+    """Gọi LLM sinh test với timeout — fallback nếu quá chậm"""
+    result_box = [""]
+    error_box  = [None]
+
+    def _call():
+        try:
+            result_box[0] = generate_test_code_llm(source_code, label)
+        except Exception as e:
+            error_box[0] = e
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive() or not result_box[0].strip():
+        print(f"        ⚠️  LLM timeout hoặc trả về rỗng — dùng fallback test")
+        return generate_fallback_test(source_code)
+
+    if error_box[0]:
+        print(f"        ⚠️  LLM lỗi: {error_box[0]} — dùng fallback test")
+        return generate_fallback_test(source_code)
+
+    return result_box[0]
+
+
 def run_pytest(source_code: str, test_code: str) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Patch db path → :memory: để không tạo file thật
+        # Patch db path → :memory:
         patched = re.sub(
             r"sqlite3\.connect\(['\"].*?\.db['\"]\)",
             "sqlite3.connect(':memory:')",
@@ -109,11 +157,13 @@ def run_pytest(source_code: str, test_code: str) -> dict:
             f.write(test_code)
 
         result = subprocess.run(
-            ["python", "-m", "pytest", "test_module.py", "-v", "--tb=short", "-q"],
-            capture_output=True, text=True, timeout=30, cwd=tmpdir
+            ["python", "-m", "pytest", "test_module.py",
+             "-v", "--tb=short", "-q", "--no-header"],
+            capture_output=True, text=True,
+            timeout=30, cwd=tmpdir
         )
 
-    output = (result.stdout + result.stderr)[:2000]
+    output   = (result.stdout + result.stderr)[:2000]
     passed_n = int(m.group(1)) if (m := re.search(r"(\d+) passed", output)) else 0
     failed_n = int(m.group(1)) if (m := re.search(r"(\d+) failed", output)) else 0
 
@@ -135,7 +185,6 @@ def tester_node(state: AgentState) -> AgentState:
     all_issues:   list = []
     test_results: dict = {}
 
-    # ← Dùng đúng key từ state.py: code_ui, code_db
     targets = [
         ("UI", state.get("code_ui", "")),
         ("DB", state.get("code_db", "")),
@@ -154,11 +203,10 @@ def tester_node(state: AgentState) -> AgentState:
         syntax = check_syntax(code, label)
         result["syntax"] = syntax
         if not syntax["passed"]:
-            err = f"[{label}] SyntaxError: {syntax['error']}"
-            all_issues.append(err)
+            all_issues.append(f"[{label}] SyntaxError: {syntax['error']}")
             print(f"        ❌ {syntax['error']}")
             test_results[label] = result
-            continue  # lỗi syntax → bỏ qua lớp 2, 3
+            continue
         print("        ✅ OK")
 
         # ── Lớp 2: Static + pylint ─────────────
@@ -180,7 +228,7 @@ def tester_node(state: AgentState) -> AgentState:
         # ── Lớp 3: Pytest ──────────────────────
         print("  [3/3] Chạy pytest...")
         try:
-            test_code     = generate_test_code(code, label)
+            test_code     = generate_test_code(code, label, timeout=60)
             pytest_result = run_pytest(code, test_code)
             result["pytest"] = pytest_result
 
@@ -191,9 +239,10 @@ def tester_node(state: AgentState) -> AgentState:
                        f"{pytest_result['n_passed']} passed\n{pytest_result['output']}")
                 all_issues.append(msg)
                 print(f"        ❌ {pytest_result['n_failed']} failed")
+                print(f"        {pytest_result['output'][:300]}")
         except subprocess.TimeoutExpired:
             all_issues.append(f"[{label}] pytest timeout > 30s")
-            print("        ⚠️  Timeout")
+            print("        ⚠️  pytest timeout")
         except Exception as e:
             all_issues.append(f"[{label}] pytest error: {e}")
             print(f"        ⚠️  {e}")
@@ -201,6 +250,7 @@ def tester_node(state: AgentState) -> AgentState:
         test_results[label] = result
 
     # ── Tổng kết ───────────────────────────────
+    print(f"\n  {'─'*40}")
     if all_issues:
         log_step(state["iteration"], "TESTER",
                  f"❌ {len(all_issues)} vấn đề cần fix")

@@ -8,18 +8,15 @@ from nodes.task_config import TASK_TYPES
 llm_coder = OllamaLLM(
     model="deepseek-coder-v2",
     temperature=0.1,
-    stop=["```", "Hope", "Sure", "Note:", "Explanation:"],
 )
 
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 
 STRICT_CODE_INSTRUCTION = """
-CRITICAL RULES — MUST FOLLOW:
-- Return ONLY raw Python code
-- NO markdown (no ```python, no ```)
-- NO explanation text before or after the code
-- NO "Here is...", "Hope this...", "Sure!" etc.
-- Start directly with: import / from / class / def / #
+RULES:
+- Return the complete Python code inside a ```python ... ``` block
+- No explanation text outside the code block
+- No "Here is...", "Hope this...", "Sure!" etc.
 """
 
 
