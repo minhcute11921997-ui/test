@@ -52,30 +52,30 @@ def main():
                             existing_codes.append(fp.read())
                     except Exception:
                         pass
-        if existing_codes:
-            print("\n🔍 Pre-scan dependencies từ code hiện có...")
-            extract_and_install_imports(existing_codes)
+    if existing_codes:
+        print("\n🔍 Pre-scan dependencies từ code hiện có...")
+        extract_and_install_imports(existing_codes)
 
-        # Gắn data_path vào project_spec nếu có
-        if data_path:
-            state["project_spec"] = f"Data directory: {data_path}"
+    # Gắn data_path vào project_spec nếu có
+    if data_path:
+        state["project_spec"] = f"Data directory: {data_path}"
 
-        # ── Build và chạy graph ─────────────────────────────────
-        graph = build_graph()
-        final_state = graph.invoke(state)
+    # ── Build và chạy graph ─────────────────────────────────
+    graph = build_graph()
+    final_state = graph.invoke(state)
 
-        # ── Kết quả cuối ────────────────────────────────────────
-        print(f"\n{'='*55}")
-        print("  📊 KẾT QUẢ CUỐI CÙNG")
-        print(f"{'='*55}")
-        print(f"  Tổng vòng lặp : {final_state['iteration']}")
-        print(f"  Trạng thái    : {final_state['status']}")
-        print(f"  Chế độ        : {'Auto' if auto_mode else 'Manual'}")
-        print(f"  Output tại    : output/iteration_{final_state['iteration']}/")
-        print(f"  Báo cáo tại   : reports/")
-        print(f"{'='*55}")
+    # ── Kết quả cuối ────────────────────────────────────────
+    print(f"\n{'='*55}")
+    print("  📊 KẾT QUẢ CUỐI CÙNG")
+    print(f"{'='*55}")
+    print(f"  Tổng vòng lặp : {final_state['iteration']}")
+    print(f"  Trạng thái    : {final_state['status']}")
+    print(f"  Chế độ        : {'Auto' if auto_mode else 'Manual'}")
+    print(f"  Output tại    : output/iteration_{final_state['iteration']}/")
+    print(f"  Báo cáo tại   : reports/")
+    print(f"{'='*55}")
 
-        save_log(final_state["history"])
+    save_log(final_state["history"])
 
 
 if __name__ == "__main__":
