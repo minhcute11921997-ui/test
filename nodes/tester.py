@@ -293,8 +293,9 @@ def run_pytest(source_code: str, test_code: str) -> dict:
 def tester_node(state: AgentState) -> dict:
     log_step(state["iteration"], "TESTER", "Bắt đầu kiểm tra code 3 lớp...")
 
-    all_issues:   list = []
-    test_results: dict = {}
+    hard_issues:    list = []   # ← lỗi thật
+    timeout_issues: list = []   # ← timeout/skip
+    test_results:   dict = {}
 
     active_types = state.get("active_task_types", ["UI", "DB"])
     targets = []
@@ -307,13 +308,14 @@ def tester_node(state: AgentState) -> dict:
     if not targets:
         log_step(state["iteration"], "TESTER", "⚠️ Không có module nào để test")
         return {
-            "test_results": {},
-            "test_issues":  ["Không có code để test"],
+            "test_results":     {},
+            "test_issues":      ["Không có code để test"],
+            "hard_test_issues": [],
+            "timeout_issues":   [],
             "history": [{"iteration": state["iteration"], "node": "TESTER",
                          "content": {"issues_count": 0, "issues": []}}],
         }
 
-    # ── FIX VẤN ĐỀ 2: Auto-install dependencies trước khi test ──
     print("\n  🔍 Kiểm tra và cài dependencies...")
     all_codes = [code for _, code in targets if code.strip()]
     extract_and_install_imports(all_codes)
@@ -332,7 +334,7 @@ def tester_node(state: AgentState) -> dict:
         syntax = check_syntax(code, label)
         result["syntax"] = syntax
         if not syntax["passed"]:
-            all_issues.append(f"[{label}] SyntaxError: {syntax['error']}")
+            hard_issues.append(f"[{label}] SyntaxError: {syntax['error']}")
             print(f"        ❌ {syntax['error']}")
             test_results[label] = result
             continue
@@ -346,10 +348,10 @@ def tester_node(state: AgentState) -> dict:
         result["pylint"] = pylint
 
         for issue in static:
-            all_issues.append(f"[{label}] {issue}")
+            hard_issues.append(f"[{label}] {issue}")
             print(f"        {issue}")
         for issue in pylint:
-            all_issues.append(f"[{label}] pylint: {issue}")
+            hard_issues.append(f"[{label}] pylint: {issue}")
             print(f"        ⚠️  {issue}")
         if not static and not pylint:
             print("        ✅ OK")
@@ -357,8 +359,8 @@ def tester_node(state: AgentState) -> dict:
         # ── Lớp 3: Pytest ──────────────────────
         print("  [3/3] Chạy pytest...")
         try:
-            test_code     = generate_test_code(code, label, timeout=60)
-            pytest_result = run_pytest(code, test_code)
+            test_code_gen = generate_test_code(code, label, timeout=60)
+            pytest_result = run_pytest(code, test_code_gen)
             result["pytest"] = pytest_result
 
             if pytest_result["passed"]:
@@ -366,37 +368,46 @@ def tester_node(state: AgentState) -> dict:
             else:
                 msg = (f"[{label}] pytest: {pytest_result['n_failed']} failed, "
                        f"{pytest_result['n_passed']} passed\n{pytest_result['output']}")
-                all_issues.append(msg)
+                hard_issues.append(msg)
                 print(f"        ❌ {pytest_result['n_failed']} failed")
                 print(f"        {pytest_result['output'][:300]}")
         except subprocess.TimeoutExpired:
-            # ← ghi vào timeout_issues thay vì all_issues
-            timeout_issues.append(f"[{label}] pytest timeout > 30s — cần tối ưu code hoặc giảm độ phức tạp")
+            timeout_issues.append(
+                f"[{label}] pytest timeout > 30s — cần tối ưu code hoặc giảm độ phức tạp"
+            )
             print("        ⚠️  pytest timeout")
         except Exception as e:
             timeout_issues.append(f"[{label}] pytest error: {e}")
             print(f"        ⚠️  {e}")
 
-    # ── Tổng kết ───────────────────────────────
-    all_issues = hard_issues + timeout_issues   # gộp lại để lưu state
+        test_results[label] = result
 
-    # Chỉ tăng retry nếu có HARD issues (không tăng nếu chỉ timeout)
+    # ── Tổng kết ───────────────────────────────
+    all_issues = hard_issues + timeout_issues
+
     tester_retry_count = state.get("tester_retry_count", 0)
     if hard_issues:
         tester_retry_count += 1
 
+    if all_issues:
+        log_step(state["iteration"], "TESTER", f"❌ {len(hard_issues)} lỗi thật, {len(timeout_issues)} timeout")
+    else:
+        log_step(state["iteration"], "TESTER", "✅ Tất cả passed!")
+
     return {
         "test_results":       test_results,
         "test_issues":        all_issues,
-        "timeout_issues":     timeout_issues,   # ← field mới
         "hard_test_issues":   hard_issues,
+        "timeout_issues":     timeout_issues,
         "tester_retry_count": tester_retry_count,
         "history": [{
             "iteration": state["iteration"],
             "node":      "TESTER",
             "content": {
-                "issues_count": len(all_issues),
-                "issues":       all_issues,
+                "issues_count":   len(all_issues),
+                "hard_count":     len(hard_issues),
+                "timeout_count":  len(timeout_issues),
+                "issues":         all_issues,
                 "results": {
                     k: {
                         "syntax_ok": v.get("syntax", {}).get("passed", False),

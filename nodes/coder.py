@@ -179,8 +179,8 @@ Fix every error listed above. Return ONLY the corrected Python code.
         log_step(iteration, f"CODER {task_type}",
                  f"⚡ Cải thiện theo evaluator: {fix_instruction[:80]}")
         timeout_note = ""
-    if my_timeout_issues:
-        timeout_note = f"""
+        if my_timeout_issues:
+            timeout_note = f"""
 PERFORMANCE ISSUE — tests timed out (> 30s):
 {chr(10).join(my_timeout_issues)}
 Optimize: reduce complexity, avoid nested loops O(n²)+, add early returns,
