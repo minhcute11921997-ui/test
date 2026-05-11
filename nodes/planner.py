@@ -144,10 +144,11 @@ Return ONLY this JSON structure, no explanation:
              f"✅ Plan ({complexity.upper()}) — {len(plan['tasks'])} tasks: {active_types}\n{plan}")
 
     return {
-        "iteration":         iteration,
-        "current_plan":      plan,
-        "original_plan":     original_plan,
-        "active_task_types": active_types,
-        "complexity":        complexity,        # ← lưu vào state để vòng sau tái dụng
+        "iteration":          iteration,
+        "current_plan":       plan,
+        "original_plan":      original_plan,
+        "active_task_types":  active_types,
+        "complexity":         complexity,    # ← lưu vào state để vòng sau tái dụng
+        "tester_retry_count": 0,             # ← reset mỗi vòng mới, không chỉ khi all_ok
         "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
     }

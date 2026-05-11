@@ -3,6 +3,7 @@ import ast
 import subprocess
 import sys
 import os
+import tempfile
 from langchain_ollama import OllamaLLM
 from state import AgentState
 from utils import parse_json_safe, log_step
@@ -15,11 +16,13 @@ llm = OllamaLLM(
     temperature=0.1,
 )
 
+# Nếu static issues >= ngưỡng này → bỏ qua LLM review (tiết kiệm thời gian)
+SKIP_LLM_IF_STATIC_ISSUES_GTE = 5
+
 
 # ── Static Analysis ───────────────────────────────────────────
 
 def _check_syntax(code: str) -> dict:
-    """Kiểm tra syntax bằng ast"""
     try:
         ast.parse(code)
         return {"ok": True, "error": None}
@@ -30,18 +33,20 @@ def _check_syntax(code: str) -> dict:
 
 
 def _check_pylint(code: str, task_type: str) -> list:
-    """Chạy pylint — chỉ lấy lỗi E (error), bỏ warning"""
+    """Chạy pylint dùng tempfile thực sự — tránh conflict giữa các lần chạy"""
     issues = []
-    os.makedirs("logs", exist_ok=True)
-    tmp_file = f"logs/tmp_{task_type.lower()}.py"
 
     try:
-        with open(tmp_file, "w", encoding="utf-8") as f:
+        # Dùng NamedTemporaryFile thay vì fixed filename
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
             f.write(code)
+            tmp_path = f.name
 
         result = subprocess.run(
             [
-                sys.executable, "-m", "pylint", tmp_file,
+                sys.executable, "-m", "pylint", tmp_path,
                 "--errors-only",
                 "--output-format=text",
                 "--score=no",
@@ -56,7 +61,8 @@ def _check_pylint(code: str, task_type: str) -> list:
             ERROR_CODES = ["E0", "E1", "F0", "error"]
             for line in result.stdout.strip().split("\n"):
                 if any(err_code in line for err_code in ERROR_CODES):
-                    clean = line.strip()
+                    # Thay absolute path bằng label dễ đọc
+                    clean = line.replace(tmp_path, f"{task_type.lower()}_code.py").strip()
                     if clean:
                         issues.append(clean)
 
@@ -67,14 +73,17 @@ def _check_pylint(code: str, task_type: str) -> list:
     except Exception as e:
         issues.append(f"Pylint lỗi: {str(e)}")
     finally:
-        if os.path.exists(tmp_file):
-            os.remove(tmp_file)
+        # Luôn dọn file tạm dù có lỗi hay không
+        try:
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
 
     return issues
 
 
 def _static_check(code: str, task_type: str) -> dict:
-    """Gộp syntax check + pylint"""
     syntax = _check_syntax(code)
     if not syntax["ok"]:
         return {
@@ -96,9 +105,6 @@ def _static_check(code: str, task_type: str) -> dict:
 # ── LLM Review ────────────────────────────────────────────────
 
 def _llm_review(code: str, task_type: str) -> dict:
-    """LLM đọc code và nhận xét — chạy sau khi syntax đã ok"""
-
-    # Đọc pattern hay gặp từ memory
     known_patterns = load_relevant_patterns(task_type)
     pattern_hint   = ""
 
@@ -156,7 +162,6 @@ Rules:
 # ── Main Review Function ──────────────────────────────────────
 
 def _review_code(code: str, task_type: str) -> dict:
-    """Review đầy đủ: Static check + LLM review"""
     if not code or not code.strip():
         return {
             "status":        "error",
@@ -172,16 +177,31 @@ def _review_code(code: str, task_type: str) -> dict:
     # 1. Static check
     static = _static_check(code, task_type)
 
-    # 2. LLM review (chỉ khi syntax ok)
-    if static["passed_syntax"]:
-        llm_result = _llm_review(code, task_type)
-    else:
+    # 2. Quyết định có chạy LLM không
+    static_issue_count = len(static["static_issues"])
+
+    if not static["passed_syntax"]:
+        # Syntax lỗi → LLM không thể đọc được code
         llm_result = {
-            "status":      "error",
-            "issues":      [],
-            "suggestions": ["Fix syntax errors before LLM review"],
+            "status":        "error",
+            "issues":        [],
+            "suggestions":   ["Fix syntax errors before LLM review"],
             "quality_score": 0,
         }
+        print(f"  ⏭️  [{task_type}] Bỏ qua LLM review — syntax error")
+
+    elif static_issue_count >= SKIP_LLM_IF_STATIC_ISSUES_GTE:
+        # Quá nhiều lỗi static → không cần LLM, sửa static trước
+        llm_result = {
+            "status":        "error",
+            "issues":        [],
+            "suggestions":   [f"Fix {static_issue_count} static/pylint issues first"],
+            "quality_score": max(0, 5 - static_issue_count),
+        }
+        print(f"  ⏭️  [{task_type}] Bỏ qua LLM review — {static_issue_count} static issues (>= {SKIP_LLM_IF_STATIC_ISSUES_GTE})")
+
+    else:
+        llm_result = _llm_review(code, task_type)
 
     # 3. Gộp tất cả issues
     all_issues   = static["static_issues"] + llm_result.get("issues", [])
@@ -205,10 +225,9 @@ def reviewer_node(state: AgentState) -> dict:
     if state["status"] == "stopped":
         return {}
 
-    iteration = state["iteration"]
+    iteration    = state["iteration"]
     log_step(iteration, "REVIEWER", "Bắt đầu review...")
 
-    # Review động theo active_task_types
     active_types     = state.get("active_task_types", ["UI", "DB"])
     feedback_results = {}
 
@@ -222,7 +241,6 @@ def reviewer_node(state: AgentState) -> dict:
         _print_review_result(t, fb)
         feedback_results[t] = fb
 
-    # Log tổng kết
     summary = " | ".join(
         f"{'✅' if fb['status'] == 'ok' else '❌'} {t}: {fb.get('quality_score','?')}/10"
         for t, fb in feedback_results.items()
@@ -246,7 +264,6 @@ def reviewer_node(state: AgentState) -> dict:
 
 
 def _print_review_result(task_type: str, feedback: dict):
-    """In kết quả review dễ đọc"""
     status_icon = "✅" if feedback["status"] == "ok" else "❌"
     print(f"\n  {status_icon} [{task_type}] Syntax: {'✅' if feedback['passed_syntax'] else '❌'} | "
           f"Pylint: {'✅' if feedback['passed_pylint'] else '❌'} | "
