@@ -53,6 +53,10 @@ class AgentState(TypedDict):
     active_task_types: list  # ["UI","DB"] | ["UI","DB","API","AUTH"]
 
     # ── Tester ────────────────────────────────────
+    # ── Complexity ────────────────────────────────────────────
+    complexity: str           # "simple" | "medium" | "complex" — đánh giá 1 lần, dùng lại
+
+    # ── Tester ────────────────────────────────────────────────
     test_results:       dict
     test_issues:        list
     tester_retry_count: int   # ← đếm số lần tester→planner retry
@@ -98,7 +102,8 @@ def create_initial_state(user_request: str) -> AgentState:
 
         test_results       = {},
         test_issues        = [],
-        tester_retry_count = 0,   # ← khởi tạo
+        tester_retry_count = 0,
+        complexity         = "",   # ← trống, planner sẽ đánh giá ở vòng 1
     )
 
 

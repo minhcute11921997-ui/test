@@ -1,8 +1,7 @@
 # nodes/planner.py
 import json
-
 from langchain_ollama import OllamaLLM
-from state import AgentState, log_to_history
+from state import AgentState
 from utils import parse_json_safe, log_step
 from memory.memory_manager import load_template, load_relevant_patterns
 from nodes.task_config import TASK_TYPES, COMPLEXITY_HINTS
@@ -13,11 +12,8 @@ llm = OllamaLLM(
     temperature=0.1,
 )
 
+
 def _assess_complexity(user_request: str, context_summary: str) -> str:
-    """
-    Đánh giá độ phức tạp của yêu cầu.
-    Trả về: "simple" | "medium" | "complex"
-    """
     prompt = f"""
 Classify the complexity of this software request.
 
@@ -32,12 +28,13 @@ Rules:
 Return ONLY one word: simple, medium, or complex
 """
     result = llm.invoke(prompt).strip().lower()
+    # Normalize phòng LLM trả linh tinh — parse_json_safe không dùng ở đây
+    # vì format không phải json, chỉ lấy từ đầu tiên
+    for level in ("simple", "medium", "complex"):
+        if level in result:
+            return level
+    return "medium"
 
-    # Normalize phòng LLM trả linh tinh
-    if result not in ("simple", "medium", "complex"):
-        result = "medium"
-
-    return result
 
 def planner_node(state: AgentState) -> dict:
     iteration = state["iteration"] + 1
@@ -64,25 +61,27 @@ Tables:  {list(state['db_schemas'].keys())}
 Schemas: {state['db_schemas']}
 """
 
-    # ── Đánh giá độ phức tạp ở vòng 1 ──────────────────────
-    complexity = "medium"
-    if iteration == 1:
+    # ── Complexity: đánh giá lần đầu, tái dụng các vòng sau ──
+    complexity = state.get("complexity", "")  # ← đọc từ state
+
+    if not complexity:
+        # Chỉ gọi LLM ở vòng 1 (hoặc khi chưa có)
         log_step(iteration, "PLANNER", "🔍 Đánh giá độ phức tạp...")
         complexity = _assess_complexity(
             user_request    = state["user_request"],
             context_summary = state.get("context_summary", ""),
         )
         log_step(iteration, "PLANNER", f"📊 Độ phức tạp: {complexity.upper()}")
+    else:
+        print(f"\n  ♻️  Tái dụng complexity từ vòng trước: {complexity.upper()}")
 
     complexity_hint = COMPLEXITY_HINTS.get(complexity, COMPLEXITY_HINTS["medium"])
 
-    # ── Xây dựng danh sách task type được phép dùng ─────────
-    allowed_types = list(TASK_TYPES.keys())  # ["UI","DB","API","AUTH","TEST"]
+    allowed_types     = list(TASK_TYPES.keys())
     type_descriptions = "\n".join(
         f'  - "{t}": {info["desc"]}' for t, info in TASK_TYPES.items()
     )
 
-    # ── Prompt động ─────────────────────────────────────────
     prompt = f"""
 You are a software project planner.
 User request: "{state['user_request']}"
@@ -117,27 +116,24 @@ Return ONLY this JSON structure, no explanation:
 """
 
     log_step(iteration, "PLANNER", "Đang tạo plan...")
-    response    = llm.invoke(prompt)
-    plan        = parse_json_safe(response)
+    response = llm.invoke(prompt)
+    plan     = parse_json_safe(response)
 
-    # ── Fallback nếu LLM lỗi ────────────────────────────────
     if not plan or "tasks" not in plan:
         plan = {
             "complexity": complexity,
             "tasks": [
-                {"id": 1, "name": "Build UI",       "type": "UI", "description": "Basic UI"},
-                {"id": 2, "name": "Build Database",  "type": "DB", "description": "Basic DB"},
+                {"id": 1, "name": "Build UI",      "type": "UI", "description": "Basic UI"},
+                {"id": 2, "name": "Build Database", "type": "DB", "description": "Basic DB"},
             ]
         }
         log_step(iteration, "PLANNER", "⚠️ JSON lỗi — dùng fallback plan")
 
-    # ── Lọc task type không hợp lệ ──────────────────────────
     valid_tasks = [t for t in plan["tasks"] if t.get("type") in TASK_TYPES]
     if not valid_tasks:
-        valid_tasks = plan["tasks"]   # giữ nguyên nếu lọc ra rỗng
+        valid_tasks = plan["tasks"]
     plan["tasks"] = valid_tasks
 
-    # ── Trích xuất active_task_types ────────────────────────
     active_types = [t["type"] for t in plan["tasks"]]
 
     original_plan = state.get("original_plan", {})
@@ -148,9 +144,10 @@ Return ONLY this JSON structure, no explanation:
              f"✅ Plan ({complexity.upper()}) — {len(plan['tasks'])} tasks: {active_types}\n{plan}")
 
     return {
-        "iteration":          iteration,
-        "current_plan":       plan,
-        "original_plan":      original_plan,
-        "active_task_types":  active_types,
+        "iteration":         iteration,
+        "current_plan":      plan,
+        "original_plan":     original_plan,
+        "active_task_types": active_types,
+        "complexity":        complexity,        # ← lưu vào state để vòng sau tái dụng
         "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
     }

@@ -20,6 +20,29 @@ RULES:
 """
 
 
+def _build_cross_context(state: AgentState, current_type: str) -> str:
+    """
+    Gom code của TẤT CẢ module khác (không phải current_type)
+    đã được sinh trước đó, theo thứ tự active_task_types.
+    Hoàn toàn động — không hardcode UI/DB.
+    """
+    cross_context = ""
+    active_types  = state.get("active_task_types", [])
+
+    for other_type in active_types:
+        if other_type == current_type:
+            continue
+        config     = TASK_TYPES.get(other_type, {})
+        code_field = config.get("state_field", f"code_{other_type.lower()}")
+        other_code = state.get(code_field, "")
+        if other_code and other_code.strip():
+            cross_context += f"\n# --- {other_type} MODULE ({config.get('desc','')}) ---\n"
+            cross_context += other_code[:400]
+            cross_context += "\n"
+
+    return cross_context
+
+
 def _run_coder(state: AgentState, task_type: str) -> str:
     iteration = state["iteration"]
     plan      = state["current_plan"]
@@ -29,7 +52,6 @@ def _run_coder(state: AgentState, task_type: str) -> str:
         {"name": task_type, "description": f"Build {task_type}"}
     )
 
-    # ── Lấy field động từ task_config ───────────────────────
     config        = TASK_TYPES.get(task_type, {})
     code_field    = config.get("state_field",    f"code_{task_type.lower()}")
     fb_field      = config.get("feedback_field", f"feedback_{task_type.lower()}")
@@ -37,7 +59,6 @@ def _run_coder(state: AgentState, task_type: str) -> str:
     prev_code     = state.get(code_field, "")
     prev_feedback = state.get(fb_field, {})
 
-    # ── Lấy fix instruction từ Evaluator ────────────────────
     fix_instruction = ""
     new_plan = state.get("new_plan", {})
     if new_plan:
@@ -83,21 +104,10 @@ Return ONLY the improved Python code.
 """
 
     else:
-        # ── Vòng 1: viết mới ──────────────────────────────
-        cross_context = ""
-        if task_type == "DB" and state.get("code_ui"):
-            cross_context = state["code_ui"][:400]
-        elif task_type == "UI" and state.get("code_db"):
-            cross_context = state["code_db"][:400]
-        else:
-            # Dynamic cross-context cho task type khác
-            for other_type, other_config in TASK_TYPES.items():
-                if other_type == task_type:
-                    continue
-                other_code = state.get(other_config.get("state_field", ""), "")
-                if other_code:
-                    cross_context += f"\n# --- {other_type} MODULE ---\n{other_code[:300]}\n"
+        # Vòng 1: viết mới
+        cross_context = _build_cross_context(state, task_type)
 
+        # Lấy existing code liên quan từ project
         existing  = state.get("existing_code", {})
         keywords  = {
             "UI":   ["ui", "view", "template", "html", "frontend"],
@@ -167,7 +177,6 @@ Fix the syntax error and return ONLY the corrected Python code.
 """
             else:
                 print(f"  ❌ Vẫn lỗi sau {MAX_RETRIES} lần — giữ code gần nhất")
-    # ────────────────────────────────────────────────────────
 
     folder   = f"output/iteration_{iteration}"
     filename = f"{folder}/{task_type.lower()}_code.py"
