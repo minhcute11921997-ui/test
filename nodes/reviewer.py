@@ -116,12 +116,17 @@ def _llm_review(code: str, task_type: str) -> dict:
         pattern_hint = "\n".join(lines)
         print(f"  📚 Loaded {len(known_patterns)} known patterns cho {task_type}")
 
+
+    code_preview = code[:3000]
+    code_note    = f"\n... (truncated, {len(code) - 3000} more chars)" if len(code) > 3000 else ""
+
     prompt = f"""
 You are a senior Python code reviewer.
 Review this {task_type} code carefully.
+    
 
 CODE TO REVIEW:
-{code[:1500]}
+{code_preview}{code_note}
 
 {pattern_hint}
 

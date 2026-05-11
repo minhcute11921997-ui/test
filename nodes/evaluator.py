@@ -10,14 +10,24 @@ llm = OllamaLLM(
     temperature=0.1,
 )
 
+MIN_QUALITY_SCORE = 7   # score tối thiểu để coi là "ok"
 
-def _build_cross_context(state: AgentState, active_types: list, feedback_results: dict) -> str:
+
+def _build_cross_context(state: AgentState, active_types: list,
+                         feedback_results: dict) -> str:
+    hard_test_issues = state.get("hard_test_issues", [])
+    timeout_issues   = state.get("timeout_issues", [])
     lines = []
+
     for t in active_types:
         config     = TASK_TYPES.get(t, {})
         code_field = config.get("state_field", f"code_{t.lower()}")
         code       = state.get(code_field, "")
         fb         = feedback_results.get(t, {})
+
+        # Tester issues theo module
+        my_test_issues    = [i for i in hard_test_issues if f"[{t}]" in i]
+        my_timeout_issues = [i for i in timeout_issues   if f"[{t}]" in i]
 
         lines.append(f"\n{'='*50}")
         lines.append(f"MODULE: {t}")
@@ -26,9 +36,19 @@ def _build_cross_context(state: AgentState, active_types: list, feedback_results
 
         issues = fb.get("issues", [])
         if issues:
-            lines.append(f"ISSUES ({len(issues)}):")
+            lines.append(f"REVIEWER ISSUES ({len(issues)}):")
             for issue in issues:
                 lines.append(f"  ❌ {issue}")
+
+        if my_test_issues:
+            lines.append(f"TESTER ISSUES ({len(my_test_issues)}):")
+            for ti in my_test_issues:
+                lines.append(f"  🧪 {ti}")
+
+        if my_timeout_issues:
+            lines.append(f"TIMEOUT ISSUES ({len(my_timeout_issues)}):")
+            for ti in my_timeout_issues:
+                lines.append(f"  ⏱️ {ti}")
 
         suggestions = fb.get("suggestions", [])
         if suggestions:
@@ -45,21 +65,23 @@ def _build_cross_context(state: AgentState, active_types: list, feedback_results
     return "\n".join(lines)
 
 
-def _generate_smart_fix_plan(
-    state:            AgentState,
-    active_types:     list,
-    feedback_results: dict,
-    iteration:        int,
-) -> dict:
-    cross_context = _build_cross_context(state, active_types, feedback_results)
+def _generate_smart_fix_plan(state, active_types, feedback_results, iteration):
+    hard_test_issues = state.get("hard_test_issues", [])
+    cross_context    = _build_cross_context(state, active_types, feedback_results)
 
     fix_fields = "\n".join(
         f'  "fix_{t.lower()}": "specific fix instruction for {t} or empty string if ok"'
         for t in active_types
     )
 
-    error_modules = [t for t, fb in feedback_results.items() if fb.get("status") != "ok"]
-    ok_modules    = [t for t, fb in feedback_results.items() if fb.get("status") == "ok"]
+    # Module bị lỗi: xét cả reviewer lẫn tester
+    error_modules = [
+        t for t in active_types
+        if feedback_results.get(t, {}).get("status") != "ok"
+        or any(f"[{t}]" in i for i in hard_test_issues)
+        or feedback_results.get(t, {}).get("quality_score", 0) < MIN_QUALITY_SCORE
+    ]
+    ok_modules = [t for t in active_types if t not in error_modules]
 
     prompt = f"""
 You are a senior software architect analyzing code review results.
@@ -75,7 +97,7 @@ DETAILED CODE AND FEEDBACK:
 
 TASK:
 Create a SPECIFIC fix plan. For each module that needs fixing:
-1. Read the exact issues from Reviewer above.
+1. Read the exact issues from Reviewer AND Tester above.
 2. Look at the code snippets to understand what's actually wrong.
 3. Check cross-module dependencies:
    - Does UI call a function that DB hasn't defined?
@@ -104,14 +126,13 @@ Rules:
     response = llm.invoke(prompt)
     result   = parse_json_safe(response)
 
-    # ── Fallback nếu LLM fail ────────────────────────────────
     if not result:
         log_step(iteration, "EVALUATOR", "⚠️ JSON lỗi — dùng fallback fix plan")
         result = {"summary": "Errors found — fix required"}
         for t in active_types:
-            fb  = feedback_results.get(t, {})   # ← .get() tránh KeyError
+            fb  = feedback_results.get(t, {})
             key = f"fix_{t.lower()}"
-            if fb.get("status") != "ok":
+            if t in error_modules:
                 suggestions = fb.get("suggestions", [])
                 result[key] = suggestions[0] if suggestions else f"Fix issues in {t} module"
             else:
@@ -127,66 +148,73 @@ def evaluator_node(state: AgentState) -> dict:
     iteration    = state["iteration"]
     log_step(iteration, "EVALUATOR", "Đang đánh giá...")
 
-    active_types = state.get("active_task_types", ["UI", "DB"])
+    active_types     = state.get("active_task_types", ["UI", "DB"])
+    hard_test_issues = state.get("hard_test_issues", [])
+    auto_mode        = state.get("auto_mode", False)
 
-    # ── Thu thập feedback của tất cả module ─────────────────
+    # Thu thập feedback reviewer
     feedback_results = {}
     for t in active_types:
         fb_field = TASK_TYPES.get(t, {}).get("feedback_field", f"feedback_{t.lower()}")
         feedback_results[t] = state.get(fb_field, {})
 
-    all_ok = all(fb.get("status") == "ok" for fb in feedback_results.values())
+    # all_ok: xét cả reviewer score + tester hard issues
+    all_ok = (
+        all(fb.get("status") == "ok" for fb in feedback_results.values())
+        and all(fb.get("quality_score", 0) >= MIN_QUALITY_SCORE
+                for fb in feedback_results.values())
+        and not hard_test_issues
+    )
 
-    # ── In bảng kết quả ──────────────────────────────────────
-    print(f"\n  {'─'*45}")
-    print(f"  {'MODULE':<8} {'SYNTAX':<8} {'PYLINT':<8} {'LLM':<6} {'SCORE'}")
-    print(f"  {'─'*45}")
+    # In bảng kết quả
+    print(f"\n  {'─'*50}")
+    print(f"  {'MODULE':<8} {'SYNTAX':<8} {'PYLINT':<8} {'LLM':<6} {'SCORE':<8} {'TEST'}")
+    print(f"  {'─'*50}")
     for t, fb in feedback_results.items():
-        syntax = "✅" if fb.get("passed_syntax") else "❌"
-        pylint = "✅" if fb.get("passed_pylint") else "❌"
-        llm_r  = "✅" if fb.get("llm_review") == "ok" else "❌"
-        score  = fb.get("quality_score", "?")
-        print(f"  {t:<8} {syntax:<8} {pylint:<8} {llm_r:<6} {score}/10")
-    print(f"  {'─'*45}")
+        syntax     = "✅" if fb.get("passed_syntax") else "❌"
+        pylint     = "✅" if fb.get("passed_pylint") else "❌"
+        llm_r      = "✅" if fb.get("llm_review") == "ok" else "❌"
+        score      = fb.get("quality_score", "?")
+        test_ok    = "✅" if not any(f"[{t}]" in i for i in hard_test_issues) else "❌"
+        score_icon = "✅" if str(score).isdigit() and int(score) >= MIN_QUALITY_SCORE else "⚠️"
+        print(f"  {t:<8} {syntax:<8} {pylint:<8} {llm_r:<6} {score_icon}{score}/10  {test_ok}")
+    print(f"  {'─'*50}")
 
     if all_ok:
         print(f"\n{'🟢'*25}")
         print("  ✅ PIPELINE HOÀN THÀNH!")
         print(f"  Code tại: output/iteration_{iteration}/")
         print(f"{'🟢'*25}")
-        confirm = input("\n  Chốt? [Enter] hoặc [s] chạy thêm: ").strip()
+
+        if auto_mode:
+            confirm = ""   # tự động chốt, không block
+        else:
+            confirm = input("\n  Chốt? [Enter] hoặc [s] chạy thêm: ").strip()
 
         status   = "done" if confirm.lower() != "s" else "running"
         all_good = status == "done"
-        new_plan = {}
-
         save_log(state.get("history", []))
         return {
             "all_good":           all_good,
-            "new_plan":           new_plan,
+            "new_plan":           {},
             "status":             status,
-            "tester_retry_count": 0,   # ← reset khi thành công
-            "history": [{"iteration": iteration, "node": "EVALUATOR", "content": status}],
+            "tester_retry_count": 0,
+            "history": [{"iteration": iteration, "node": "EVALUATOR",
+                         "content": status}],
         }
 
-    # ── Sinh smart fix plan ──────────────────────────────────
+    # Sinh fix plan
     log_step(iteration, "EVALUATOR", "🧠 Đang phân tích cross-module dependencies...")
-
     new_plan = _generate_smart_fix_plan(
-        state            = state,
-        active_types     = active_types,
-        feedback_results = feedback_results,
-        iteration        = iteration,
+        state=state, active_types=active_types,
+        feedback_results=feedback_results, iteration=iteration,
     )
 
     print(f"\n  📋 Fix Plan:")
     print(f"  Summary: {new_plan.get('summary', '')}")
     for t in active_types:
         fix = new_plan.get(f"fix_{t.lower()}", "")
-        if fix:
-            print(f"\n  🔧 [{t}]: {fix}")
-        else:
-            print(f"  ✅ [{t}]: no fix needed")
+        print(f"\n  {'🔧' if fix else '✅'} [{t}]: {fix if fix else 'no fix needed'}")
 
     log_step(iteration, "EVALUATOR", f"⚠️ Fix plan:\n{new_plan}")
     save_log(state.get("history", []))
@@ -195,5 +223,6 @@ def evaluator_node(state: AgentState) -> dict:
         "all_good": False,
         "new_plan": new_plan,
         "status":   "running",
-        "history":  [{"iteration": iteration, "node": "EVALUATOR", "content": "running"}],
+        "history":  [{"iteration": iteration, "node": "EVALUATOR",
+                      "content": "running"}],
     }
