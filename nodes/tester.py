@@ -2,6 +2,7 @@
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 from langchain_ollama import OllamaLLM
@@ -14,6 +15,86 @@ llm = OllamaLLM(
     temperature=0.1,
     num_predict=1024,
 )
+
+# ── Map tên import → tên package pip ──────────────────────────
+IMPORT_TO_PKG = {
+    "flask":        "flask",
+    "fastapi":      "fastapi",
+    "uvicorn":      "uvicorn",
+    "sqlalchemy":   "sqlalchemy",
+    "jwt":          "pyjwt",
+    "bcrypt":       "bcrypt",
+    "dotenv":       "python-dotenv",
+    "aiohttp":      "aiohttp",
+    "pydantic":     "pydantic",
+    "pymongo":      "pymongo",
+    "psycopg2":     "psycopg2-binary",
+    "redis":        "redis",
+    "celery":       "celery",
+    "requests":     "requests",
+    "httpx":        "httpx",
+    "starlette":    "starlette",
+    "passlib":      "passlib",
+    "cryptography": "cryptography",
+    "alembic":      "alembic",
+    "marshmallow":  "marshmallow",
+    "wtforms":      "wtforms",
+    "jinja2":       "jinja2",
+    "click":        "click",
+    "rich":         "rich",
+    "typer":        "typer",
+}
+
+
+# ══════════════════════════════════════════════
+# FIX VẤN ĐỀ 2 — AUTO-INSTALL DEPENDENCIES
+# ══════════════════════════════════════════════
+
+def extract_and_install_imports(codes: list[str]):
+    """
+    Quét tất cả code, tìm các import bị thiếu và tự động pip install.
+    codes: list các đoạn code string cần quét.
+    """
+    # Thu thập tất cả tên module được import
+    found_modules = set()
+    for code in codes:
+        hits = re.findall(r"^(?:import|from)\s+(\w+)", code, re.MULTILINE)
+        found_modules.update(hits)
+
+    # Kiểm tra từng module, cài nếu thiếu
+    for mod in found_modules:
+        pkg = IMPORT_TO_PKG.get(mod.lower())
+        if not pkg:
+            continue
+        try:
+            __import__(mod)
+        except ImportError:
+            print(f"  📦 Phát hiện thiếu '{mod}' — đang cài '{pkg}'...")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg, "-q"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print(f"  ✅ Cài '{pkg}' thành công")
+            else:
+                print(f"  ❌ Cài '{pkg}' thất bại: {result.stderr.strip()[:200]}")
+
+    # Cũng đọc requirements.txt trong output nếu có
+    _install_from_requirements()
+
+
+def _install_from_requirements():
+    """Tìm requirements.txt gần nhất trong output/ và cài"""
+    for root, _, files in os.walk("output"):
+        for fname in files:
+            if fname == "requirements.txt":
+                fpath = os.path.join(root, fname)
+                print(f"  📦 Tìm thấy {fpath} — đang cài...")
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", fpath, "-q"],
+                    capture_output=True
+                )
+                return  # chỉ cài file mới nhất (đầu tiên tìm được)
 
 
 # ══════════════════════════════════════════════
@@ -40,8 +121,6 @@ def check_syntax(code: str, label: str) -> dict:
 # LỚP 2 — STATIC ANALYSIS
 # ══════════════════════════════════════════════
 
-# Mỗi rule: (pattern_phải_có, message_nếu_thiếu)
-# Logic đúng: nếu pattern KHÔNG tìm thấy → báo lỗi
 STATIC_RULES_BY_TYPE = {
     "DB": [
         (r"def \w+",                "Không có hàm nào được định nghĩa trong DB module"),
@@ -72,7 +151,6 @@ STATIC_RULES_BY_TYPE = {
     ],
 }
 
-# Rules áp dụng cho mọi module
 STATIC_RULES_COMMON = [
     (r"^(import |from )",           "Không có import statement nào"),
 ]
@@ -113,7 +191,7 @@ def check_pylint(code: str, label: str) -> list:
 # ══════════════════════════════════════════════
 
 def generate_fallback_test(source_code: str) -> str:
-    """Sinh test tối thiểu không cần LLM — dựa trên def có trong code"""
+    """Sinh test tối thiểu không cần LLM"""
     funcs = re.findall(r"^def (\w+)\(", source_code, re.MULTILINE)
     lines = [
         "import sys, os",
@@ -217,7 +295,6 @@ def tester_node(state: AgentState) -> dict:
     all_issues:   list = []
     test_results: dict = {}
 
-    # ── Động theo active_task_types (không hardcode UI+DB) ───
     active_types = state.get("active_task_types", ["UI", "DB"])
     targets = []
     for task_type in active_types:
@@ -234,6 +311,11 @@ def tester_node(state: AgentState) -> dict:
             "history": [{"iteration": state["iteration"], "node": "TESTER",
                          "content": {"issues_count": 0, "issues": []}}],
         }
+
+    # ── FIX VẤN ĐỀ 2: Auto-install dependencies trước khi test ──
+    print("\n  🔍 Kiểm tra và cài dependencies...")
+    all_codes = [code for _, code in targets if code.strip()]
+    extract_and_install_imports(all_codes)
 
     for label, code in targets:
         if not code.strip():
@@ -257,7 +339,7 @@ def tester_node(state: AgentState) -> dict:
 
         # ── Lớp 2: Static + pylint ─────────────
         print("  [2/3] Static analysis...")
-        static = check_static(code, label)    # ← truyền task_type
+        static = check_static(code, label)
         pylint = check_pylint(code, label)
         result["static"] = static
         result["pylint"] = pylint
@@ -302,7 +384,6 @@ def tester_node(state: AgentState) -> dict:
     else:
         log_step(state["iteration"], "TESTER", "✅ Tất cả passed!")
 
-    # Tăng retry counter nếu có lỗi (dùng để giới hạn vòng tester→planner)
     tester_retry_count = state.get("tester_retry_count", 0)
     if all_issues:
         tester_retry_count += 1
@@ -311,7 +392,6 @@ def tester_node(state: AgentState) -> dict:
         "test_results":       test_results,
         "test_issues":        all_issues,
         "tester_retry_count": tester_retry_count,
-        # ← Chỉ entry MỚI
         "history": [{
             "iteration": state["iteration"],
             "node":      "TESTER",

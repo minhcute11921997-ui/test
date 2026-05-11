@@ -1,5 +1,7 @@
 # nodes/coder.py
 import ast
+import re
+import os
 from langchain_ollama import OllamaLLM
 from state import AgentState
 from utils import log_step, save_code, clean_code
@@ -14,18 +16,18 @@ MAX_RETRIES = 3
 
 STRICT_CODE_INSTRUCTION = """
 RULES:
-- Return the complete Python code inside a ```python ... ``` block
-- No explanation text outside the code block
-- No "Here is...", "Hope this...", "Sure!" etc.
+- If the task requires multiple files (e.g. app.py + requirements.txt + config.py),
+  output EACH file separately using this format:
+    ### filename.ext
+    ```python
+    ...code...
+    ```
+- If only one file is needed, return a single ```python ... ``` block.
+- No explanation text, no "Here is...", "Hope this...", "Sure!" etc.
 """
 
 
 def _build_cross_context(state: AgentState, current_type: str) -> str:
-    """
-    Gom code của TẤT CẢ module khác (không phải current_type)
-    đã được sinh trước đó, theo thứ tự active_task_types.
-    Hoàn toàn động — không hardcode UI/DB.
-    """
     cross_context = ""
     active_types  = state.get("active_task_types", [])
 
@@ -41,6 +43,22 @@ def _build_cross_context(state: AgentState, current_type: str) -> str:
             cross_context += "\n"
 
     return cross_context
+
+
+def extract_multiple_files(raw_output: str) -> dict | None:
+    """
+    Phát hiện nhiều file trong output LLM theo format:
+    ### filename.ext
+    ```python / ```text / ```bash
+    ...content...
+    ```
+    Trả về dict {filename: content} nếu có, None nếu chỉ có 1 file.
+    """
+    pattern = r"###\s*([\w./\-]+\.\w+)\s*\n```(?:python|text|bash|sql|html|css|js)?\s*\n(.*?)```"
+    matches = re.findall(pattern, raw_output, re.DOTALL)
+    if len(matches) >= 2:
+        return {fname.strip(): content.strip() for fname, content in matches}
+    return None
 
 
 def _run_coder(state: AgentState, task_type: str) -> str:
@@ -63,6 +81,9 @@ def _run_coder(state: AgentState, task_type: str) -> str:
     new_plan = state.get("new_plan", {})
     if new_plan:
         fix_instruction = new_plan.get(f"fix_{task_type.lower()}", "")
+
+    folder   = f"output/iteration_{iteration}"
+    os.makedirs(folder, exist_ok=True)
 
     # ── Xây dựng prompt theo tình huống ─────────────────────
     if prev_code and prev_feedback.get("status") == "error":
@@ -88,7 +109,7 @@ Fix the code above. Return ONLY the fixed Python code.
 """
 
     elif prev_code and prev_feedback.get("status") == "ok" and fix_instruction:
-        # Vòng 2+: code ok nhưng cần chỉnh để đồng bộ
+        # Vòng 2+: code ok nhưng cần cải thiện theo yêu cầu mới
         prompt = f"""
 {STRICT_CODE_INSTRUCTION}
 
@@ -103,11 +124,18 @@ IMPROVEMENT NEEDED:
 Return ONLY the improved Python code.
 """
 
+    elif prev_code and not fix_instruction:
+        # ── FIX VẤN ĐỀ 1: code vòng trước ok, không có gì cần sửa → GIỮ NGUYÊN ──
+        log_step(iteration, f"CODER {task_type}",
+                 f"♻️  Giữ nguyên code vòng trước — không có lỗi và không có yêu cầu mới")
+        filename = f"{folder}/{task_type.lower()}_code.py"
+        save_code(prev_code, filename)
+        return prev_code
+
     else:
         # Vòng 1: viết mới
         cross_context = _build_cross_context(state, task_type)
 
-        # Lấy existing code liên quan từ project
         existing  = state.get("existing_code", {})
         keywords  = {
             "UI":   ["ui", "view", "template", "html", "frontend"],
@@ -141,16 +169,33 @@ Description: {task['description']}
 {cross_context}
 
 {"Extend the existing code above." if relevant_code else "Write clean, working Python code."}
-Return ONLY the Python code.
+Also create a requirements.txt listing all pip packages used.
+Return each file separately using the ### filename format described above.
 """
 
     log_step(iteration, f"CODER {task_type}",
              f"{'🔧 Sửa lỗi' if prev_code else '✍️ Viết mới'}: {task['name']}...")
 
     # ── Gọi LLM với retry nếu syntax lỗi ────────────────────
+    raw  = ""
     code = ""
     for attempt in range(1, MAX_RETRIES + 1):
         raw  = llm_coder.invoke(prompt)
+
+        # ── FIX VẤN ĐỀ 3: kiểm tra multi-file trước ──
+        multi = extract_multiple_files(raw)
+        if multi:
+            print(f"  📁 LLM trả về {len(multi)} files: {list(multi.keys())}")
+            for fname, content in multi.items():
+                save_code(content, f"{folder}/{fname}")
+            # file chính là file .py đầu tiên không phải requirements
+            main_file = next(
+                (v for k, v in multi.items() if k.endswith(".py") and "requirement" not in k),
+                list(multi.values())[0]
+            )
+            log_step(iteration, f"CODER {task_type}", f"✅ Xong (multi-file) — {folder}/")
+            return main_file
+
         code = clean_code(raw)
 
         try:
@@ -178,7 +223,6 @@ Fix the syntax error and return ONLY the corrected Python code.
             else:
                 print(f"  ❌ Vẫn lỗi sau {MAX_RETRIES} lần — giữ code gần nhất")
 
-    folder   = f"output/iteration_{iteration}"
     filename = f"{folder}/{task_type.lower()}_code.py"
     save_code(code, filename)
 
