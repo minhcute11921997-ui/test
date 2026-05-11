@@ -13,8 +13,8 @@ from nodes.human_gate import human_gate_node
 from nodes.context_loader import context_loader_node
 from nodes.reporter  import reporter_node
 from nodes.tester import tester_node
+from config.pipeline_config import MAX_TESTER_RETRIES
 
-MAX_TESTER_RETRIES = 2   # ← giới hạn retry tester→planner
 
 CODER_NODES = {
     "UI":   ("coder_ui",   coder_a_node),

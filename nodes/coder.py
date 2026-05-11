@@ -51,18 +51,44 @@ def _build_cross_context(state: AgentState, current_type: str) -> str:
 
 def extract_multiple_files(raw_output: str) -> dict | None:
     """
-    Phát hiện nhiều file trong output LLM theo format:
-    ### filename.ext
-    ```python / ```text / ```bash
-    ...content...
-    ```
-    Trả về dict {filename: content} nếu có >= 2 file, None nếu chỉ 1 file.
+    Parse multi-file output từ LLM. Hỗ trợ nhiều format:
+    - ### filename.ext
+    - ## filename.ext  
+    - **filename.ext**
+    - # File: filename.ext
     """
-    pattern = r"###\s*([\w./\-]+\.\w+)\s*\n```(?:python|text|bash|sql|html|css|js)?\s*\n(.*?)```"
-    matches = re.findall(pattern, raw_output, re.DOTALL)
-    if len(matches) >= 2:
-        return {fname.strip(): content.strip() for fname, content in matches}
-    return None
+    results = {}
+
+    # Pattern 1: ### filename.ext (original)
+    pattern1 = r"###?\s*([\w./\-]+\.\w+)\s*\n```(?:python|text|bash|sql|html|css|js|)?\s*\n(.*?)```"
+    # Pattern 2: **filename.ext**
+    pattern2 = r"\*\*([\w./\-]+\.\w+)\*\*\s*\n```(?:python|text|bash|sql|html|css|js|)?\s*\n(.*?)```"
+    # Pattern 3: # File: filename.ext
+    pattern3 = r"#\s*[Ff]ile:\s*([\w./\-]+\.\w+)\s*\n```(?:python|text|bash|sql|html|css|js|)?\s*\n(.*?)```"
+
+    for pattern in [pattern1, pattern2, pattern3]:
+        matches = re.findall(pattern, raw_output, re.DOTALL)
+        for fname, content in matches:
+            fname = fname.strip()
+            if fname not in results:          # không overwrite nếu đã có
+                results[fname] = content.strip()
+
+    return results if len(results) >= 2 else None
+
+def _validate_multi_output(files: dict, task_type: str) -> list:
+    """
+    Kiểm tra output multi-file có đủ file quan trọng không.
+    Trả về list cảnh báo (không raise exception).
+    """
+    warnings = []
+    has_py   = any(k.endswith(".py") for k in files)
+    has_req  = any("requirement" in k.lower() for k in files)
+
+    if not has_py:
+        warnings.append(f"[{task_type}] Không tìm thấy file .py trong output multi-file")
+    if not has_req:
+        warnings.append(f"[{task_type}] Không có requirements.txt — dependencies không được track")
+    return warnings
 
 
 def _run_coder(state: AgentState, task_type: str) -> str:
@@ -218,6 +244,9 @@ Return ONLY the improved Python code.
         # Kiểm tra multi-file trước
         multi = extract_multiple_files(raw)
         if multi:
+            warns = _validate_multi_output(multi, task_type)
+            for w in warns:
+                print(f"  ⚠️  {w}")
             print(f"  📁 LLM trả về {len(multi)} files: {list(multi.keys())}")
             for fname, content in multi.items():
                 save_code(content, f"{folder}/{fname}")

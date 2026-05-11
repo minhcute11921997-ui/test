@@ -316,10 +316,6 @@ def tester_node(state: AgentState) -> dict:
                          "content": {"issues_count": 0, "issues": []}}],
         }
 
-    print("\n  🔍 Kiểm tra và cài dependencies...")
-    all_codes = [code for _, code in targets if code.strip()]
-    extract_and_install_imports(all_codes)
-
     for label, code in targets:
         if not code.strip():
             print(f"  ⚠️  [{label}] rỗng — bỏ qua")

@@ -124,7 +124,6 @@ def _llm_review(code: str, task_type: str) -> dict:
 You are a senior Python code reviewer.
 Review this {task_type} code carefully.
     
-
 CODE TO REVIEW:
 {code_preview}{code_note}
 

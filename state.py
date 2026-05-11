@@ -1,74 +1,72 @@
-# state.py
 from typing import TypedDict, Optional, Annotated
 from operator import add
+from config.pipeline_config import MAX_ITERATIONS
 
-class AgentState(TypedDict):
-    # ── Thông tin cơ bản ──────────────────────────
-    user_request: str
-    iteration: int
+# ── Các field BẮT BUỘC phải có ngay từ đầu ────────────────────────
+class _RequiredState(TypedDict):
+    user_request:   str
+    iteration:      int
     max_iterations: int
+    auto_mode:      bool
+    status:         str
+    history:        Annotated[list, add]
 
-    # ── Auto mode ─────────────────────────────────
-    auto_mode: bool          # ← THÊM: True = không hỏi lại ở human_gate
 
-    # ── Plan ──────────────────────────────────────
-    original_plan: dict
-    current_plan: dict
+# ── Các field TUỲ CHỌN — chỉ có sau khi node tương ứng chạy ───────
+class _OptionalState(TypedDict, total=False):
+    # Plan
+    original_plan:  dict
+    current_plan:   dict
+    complexity:     str
+    active_task_types: list
 
-    # ── Output của các Coder ──────────────────────
-    code_ui: str
-    code_db: str
+    # Code output
+    code_ui:   str
+    code_db:   str
     code_api:  str
     code_auth: str
     code_test: str
 
-    # ── Feedback từ Reviewer ──────────────────────
-    feedback_ui: dict
-    feedback_db: dict
+    # Feedback từ Reviewer
+    feedback_ui:   dict
+    feedback_db:   dict
     feedback_api:  dict
     feedback_auth: dict
     feedback_test: dict
 
-    # ── Quyết định từ Evaluator ───────────────────
+    # Evaluator
     all_good: bool
     new_plan: dict
 
-    # ── Human intervention ────────────────────────
-    human_decision: str
+    # Human gate
+    human_decision:    str
     extra_requirement: str
-    status: str
 
-    # ── Lịch sử (cho báo cáo) ────────────────────
-    history: Annotated[list, add]
-
-    # ── Context từ dự án ──────────────────────────
-    project_spec: str
-    existing_code: dict
+    # Context
+    project_spec:    str
+    existing_code:   dict
     context_summary: str
+    db_tables:       list
+    db_schemas:      dict
 
-    # ── DB context ────────────────────────────────
-    db_tables:  list
-    db_schemas: dict
-
-    # ── Task types đang active ────────────────────
-    active_task_types: list
-
-    # ── Complexity ────────────────────────────────
-    complexity: str
-
-    # ── Tester ────────────────────────────────────
+    # Tester
     test_results:       dict
     test_issues:        list
-    hard_test_issues:   list   # ← THÊM: lỗi thật
+    hard_test_issues:   list
     timeout_issues:     list
     tester_retry_count: int
+
+
+class AgentState(_RequiredState, _OptionalState):
+    """State tổng hợp — required + optional fields."""
+    pass
 
 
 def create_initial_state(user_request: str, auto_mode: bool = False) -> AgentState:
     return AgentState(
         user_request=user_request,
         iteration=0,
-        max_iterations=5,
+        max_iterations=MAX_ITERATIONS,
 
         auto_mode=auto_mode,         # ← THÊM
 
