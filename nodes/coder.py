@@ -10,12 +10,16 @@ from nodes.task_config import TASK_TYPES
 llm_coder = OllamaLLM(
     model="deepseek-coder-v2",
     temperature=0.1,
+    num_predict=8192,   # ← thêm dòng này
+    num_ctx=16384,      # ← context window đủ lớn để đọc code dài
 )
 
 MAX_RETRIES = 3
 
 STRICT_CODE_INSTRUCTION = """
 RULES:
+- Write COMPLETE, FULLY FUNCTIONAL code — no stubs, no placeholders like "# TODO", no "pass" unless necessary.
+- Include ALL imports, ALL function bodies, ALL error handling.
 - If the task requires multiple files (e.g. app.py + requirements.txt + config.py),
   output EACH file separately using this format:
     ### filename.ext
@@ -39,7 +43,7 @@ def _build_cross_context(state: AgentState, current_type: str) -> str:
         other_code = state.get(code_field, "")
         if other_code and other_code.strip():
             cross_context += f"\n# --- {other_type} MODULE ({config.get('desc','')}) ---\n"
-            cross_context += other_code[:400]
+            cross_context += other_code[:1200]
             cross_context += "\n"
 
     return cross_context

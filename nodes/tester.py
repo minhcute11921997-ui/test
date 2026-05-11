@@ -13,6 +13,8 @@ from nodes.task_config import TASK_TYPES
 llm = OllamaLLM(
     model="qwen2.5:14b",
     temperature=0.1,
+    num_predict=4096,   # ← tăng lên
+    num_ctx=8192,
 )
 
 # ── Map tên import → tên package pip ──────────────────────────
