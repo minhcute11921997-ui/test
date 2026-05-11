@@ -104,7 +104,7 @@ def _static_check(code: str, task_type: str) -> dict:
 
 # ── LLM Review ────────────────────────────────────────────────
 
-def _llm_review(code: str, task_type: str) -> dict:
+def _llm_review(code: str, task_type: str, task: dict = None) -> dict:
     known_patterns = load_relevant_patterns(task_type)
     pattern_hint   = ""
 
@@ -120,10 +120,27 @@ def _llm_review(code: str, task_type: str) -> dict:
     code_preview = code[:3000]
     code_note    = f"\n... (truncated, {len(code) - 3000} more chars)" if len(code) > 3000 else ""
 
+        # ── Spec block từ task (nếu có) ──────────────────────────
+    spec_block = ""
+    if task:
+        required_fns  = task.get("required_functions", [])
+        criteria      = task.get("acceptance_criteria", [])
+        edge_cases    = task.get("edge_cases", [])
+        if required_fns:
+            spec_block += "REQUIRED FUNCTIONS (check all are implemented):\n"
+            spec_block += "\n".join(f"  - {f}" for f in required_fns) + "\n"
+        if criteria:
+            spec_block += "\nACCEPTANCE CRITERIA (check each is met):\n"
+            spec_block += "\n".join(f"  - {c}" for c in criteria) + "\n"
+        if edge_cases:
+            spec_block += "\nEDGE CASES (check these are handled):\n"
+            spec_block += "\n".join(f"  - {e}" for e in edge_cases) + "\n"
+
     prompt = f"""
 You are a senior Python code reviewer.
 Review this {task_type} code carefully.
-    
+
+{spec_block}
 CODE TO REVIEW:
 {code_preview}{code_note}
 
@@ -131,6 +148,14 @@ CODE TO REVIEW:
 
 Return ONLY this JSON, no explanation:
 {{
+  "scores": {{
+    "correctness":  <1-10>,
+    "completeness": <1-10>,
+    "consistency":  <1-10>,
+    "edge_cases":   <1-10>,
+    "testability":  <1-10>
+  }},
+  "quality_score": <average of scores above, 1 decimal>,
   "status": "ok" or "error",
   "issues": [
     "describe issue 1 clearly",
@@ -139,15 +164,16 @@ Return ONLY this JSON, no explanation:
   "suggestions": [
     "how to fix issue 1",
     "how to fix issue 2"
-  ],
-  "quality_score": 1 to 10
+  ]
 }}
 
 Rules:
-- "status" is "error" only if there are real bugs or missing logic
+- status "error" only if real bugs or missing critical logic
+- completeness < 6 if any required_function is missing
+- edge_cases < 6 if edge cases are not handled
 - Empty issues list means status must be "ok"
 - Be specific, not generic
-- Pay special attention to the KNOWN ISSUES listed above
+- Pay attention to KNOWN ISSUES listed above
 """
     response = llm.invoke(prompt)
     result   = parse_json_safe(response)
@@ -165,7 +191,7 @@ Rules:
 
 # ── Main Review Function ──────────────────────────────────────
 
-def _review_code(code: str, task_type: str) -> dict:
+def _review_code(code: str, task_type: str, task: dict = None) -> dict:
     if not code or not code.strip():
         return {
             "status":        "error",
@@ -205,7 +231,7 @@ def _review_code(code: str, task_type: str) -> dict:
         print(f"  ⏭️  [{task_type}] Bỏ qua LLM review — {static_issue_count} static issues (>= {SKIP_LLM_IF_STATIC_ISSUES_GTE})")
 
     else:
-        llm_result = _llm_review(code, task_type)
+        llm_result = _llm_review(code, task_type, task=task)
 
     # 3. Gộp tất cả issues
     all_issues   = static["static_issues"] + llm_result.get("issues", [])
@@ -235,13 +261,21 @@ def reviewer_node(state: AgentState) -> dict:
     active_types     = state.get("active_task_types", ["UI", "DB"])
     feedback_results = {}
 
+    plan = state.get("current_plan", {})
+
     for t in active_types:
         config     = TASK_TYPES.get(t, {})
         code_field = config.get("state_field", f"code_{t.lower()}")
         code       = state.get(code_field, "")
 
+        # Lấy task spec từ plan để truyền vào reviewer
+        task = next(
+            (tk for tk in plan.get("tasks", []) if tk.get("type") == t),
+            None
+        )
+
         print(f"\n  🔍 Review {t}...")
-        fb = _review_code(code, t)
+        fb = _review_code(code, t, task=task)
         _print_review_result(t, fb)
         feedback_results[t] = fb
 
@@ -274,6 +308,14 @@ def _print_review_result(task_type: str, feedback: dict):
           f"LLM: {feedback.get('llm_review', '?')} | "
           f"Score: {feedback.get('quality_score', '?')}/10")
 
+     # ── Hiển thị rubric chi tiết nếu có ──────────────────────
+    scores = feedback.get("scores", {})
+    if scores:
+        rubric_str = " | ".join(
+            f"{k[:4]}={v}" for k, v in scores.items()
+        )
+        print(f"     📊 Rubric: {rubric_str}")
+        
     if feedback["issues"]:
         print(f"  ⚠️  Issues ({len(feedback['issues'])}):")
         for issue in feedback["issues"]:

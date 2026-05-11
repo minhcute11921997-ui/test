@@ -1,6 +1,7 @@
 # memory/memory_manager.py
 import json
 import os
+import re 
 from datetime import datetime
 
 TEMPLATES_PATH = "memory/templates.json"
@@ -74,44 +75,64 @@ def load_template(request: str) -> dict | None:
 # ── Patterns ─────────────────────────────────────────────────
 
 def save_patterns(history: list):
-    """
-    Quét history, trích xuất lỗi từ TẤT CẢ module (không chỉ UI/DB).
-    Nhận diện động qua key feedback_* trong content của REVIEWER node.
-    """
     patterns = _load(PATTERNS_PATH)
 
     for entry in history:
-        if entry.get("node") != "REVIEWER":
-            continue
-
-        content = entry.get("content", {})
-        if not isinstance(content, dict):
-            continue
-
-        # ── Duyệt tất cả feedback_* key một cách động ────────
-        for key, fb in content.items():
-            if not key.startswith("feedback_") or not isinstance(fb, dict):
+        # ── Từ REVIEWER ──────────────────────────────────────
+        if entry.get("node") == "REVIEWER":
+            content = entry.get("content", {})
+            if not isinstance(content, dict):
                 continue
+            for key, fb in content.items():
+                if not key.startswith("feedback_") or not isinstance(fb, dict):
+                    continue
+                task_type   = key.replace("feedback_", "").upper()
+                issues      = fb.get("issues", [])
+                suggestions = fb.get("suggestions", [])
+                for i, issue in enumerate(issues):
+                    _upsert_pattern(
+                        patterns, issue, task_type,
+                        fix    = suggestions[i] if i < len(suggestions) else "",
+                        source = "reviewer",
+                    )
 
-            task_type   = key.replace("feedback_", "").upper()
-            issues      = fb.get("issues", [])
-            suggestions = fb.get("suggestions", [])
-
-            for i, issue in enumerate(issues):
-                pattern_key = issue.strip().lower()[:80]
-                if pattern_key not in patterns:
-                    patterns[pattern_key] = {
-                        "issue":      issue,
-                        "task_type":  task_type,
-                        "fix":        suggestions[i] if i < len(suggestions) else "",
-                        "seen_count": 0,
-                        "last_seen":  None,
-                    }
-                patterns[pattern_key]["seen_count"] += 1
-                patterns[pattern_key]["last_seen"]   = datetime.now().isoformat()
+        # ── Từ TESTER ────────────────────────────────────────
+        elif entry.get("node") == "TESTER":
+            content = entry.get("content", {})
+            if not isinstance(content, dict):
+                continue
+            for issue in content.get("issues", []):
+                match     = re.match(r"\[(\w+)\]", str(issue))
+                task_type = match.group(1) if match else "UNKNOWN"
+                _upsert_pattern(
+                    patterns, issue, task_type,
+                    fix    = "",
+                    source = "tester",
+                )
 
     _save(PATTERNS_PATH, patterns)
     print(f"  💾 Đã cập nhật patterns.json ({len(patterns)} patterns)")
+
+
+def _upsert_pattern(patterns: dict, issue: str, task_type: str,
+                    fix: str, source: str):
+    """Thêm mới hoặc cập nhật pattern — tránh duplicate."""
+    key = str(issue).strip().lower()[:80]
+    if key not in patterns:
+        patterns[key] = {
+            "issue":      issue,
+            "task_type":  task_type,
+            "fix":        fix,
+            "source":     source,
+            "seen_count": 0,
+            "last_seen":  None,
+        }
+    else:
+        # Cập nhật fix nếu chưa có
+        if fix and not patterns[key].get("fix"):
+            patterns[key]["fix"] = fix
+    patterns[key]["seen_count"] += 1
+    patterns[key]["last_seen"]   = datetime.now().isoformat()
 
 
 def load_relevant_patterns(task_type: str, code: str = "") -> list:
