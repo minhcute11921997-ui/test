@@ -143,6 +143,7 @@ Return ONLY this JSON structure, no explanation:
     log_step(iteration, "PLANNER",
              f"✅ Plan ({complexity.upper()}) — {len(plan['tasks'])} tasks: {active_types}\n{plan}")
 
+    is_retry = state.get("tester_retry_count", 0) > 0
     return {
         "iteration":          iteration,
         "current_plan":       plan,
@@ -152,7 +153,7 @@ Return ONLY this JSON structure, no explanation:
         "tester_retry_count": 0,             # ← reset mỗi vòng mới, không chỉ khi all_ok
         "test_issues":        [],  # ← reset để CASE B không đọc lỗi cũ
         "test_results":       [],  # ← reset để CASE B không đọc kết quả cũ
-        "hard_test_issues":   [],   # ← THÊM
-        "timeout_issues":     [],
+        "hard_test_issues": [] if not is_retry else state.get("hard_test_issues", []),
+        "timeout_issues":   [] if not is_retry else state.get("timeout_issues", []),
         "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
     }

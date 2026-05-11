@@ -49,9 +49,6 @@ def route_between_coders(task_type: str):
         return next_node
     return _route
 
-
-MAX_TESTER_RETRIES = 2
-
 def route_after_tester(state: AgentState) -> str:
     hard_issues    = state.get("hard_test_issues", [])
     timeout_issues = state.get("timeout_issues", [])

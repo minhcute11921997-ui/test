@@ -1,4 +1,4 @@
-python
+
 # config/pipeline_config.py  (tạo folder config/ và file __init__.py rỗng)
 
 # ── Retry & loop limits ─────────────────────────────────────────────

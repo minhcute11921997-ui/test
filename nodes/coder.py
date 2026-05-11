@@ -127,8 +127,8 @@ def _run_coder(state: AgentState, task_type: str) -> str:
     os.makedirs(folder, exist_ok=True)
 
     # ── Xác định tình huống ─────────────────────────────────────────
-    has_error      = (prev_feedback.get("status") == "error") or bool(my_hard_issues)
-    has_fix_hint   = bool(fix_instruction) or bool(my_timeout_issues)
+    has_error      = (prev_feedback.get("status") == "error") or bool(my_hard_issues) or bool(fix_instruction)
+    has_fix_hint   = bool(my_timeout_issues)
     is_first_run = not prev_code
 
     if is_first_run:

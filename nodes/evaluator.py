@@ -10,7 +10,7 @@ llm = OllamaLLM(
     temperature=0.1,
 )
 
-MIN_QUALITY_SCORE = 7   # score tối thiểu để coi là "ok"
+MIN_QUALITY_SCORE = 20   # score tối thiểu để coi là "ok"
 
 
 def _build_cross_context(state: AgentState, active_types: list,
@@ -80,6 +80,7 @@ def _generate_smart_fix_plan(state, active_types, feedback_results, iteration):
         if feedback_results.get(t, {}).get("status") != "ok"
         or any(f"[{t}]" in i for i in hard_test_issues)
         or feedback_results.get(t, {}).get("quality_score", 0) < MIN_QUALITY_SCORE
+        or bool(feedback_results.get(t, {}).get("suggestions", []))
     ]
     ok_modules = [t for t in active_types if t not in error_modules]
 
