@@ -152,5 +152,7 @@ Return ONLY this JSON structure, no explanation:
         "tester_retry_count": 0,             # ← reset mỗi vòng mới, không chỉ khi all_ok
         "test_issues":        [],  # ← reset để CASE B không đọc lỗi cũ
         "test_results":       [],  # ← reset để CASE B không đọc kết quả cũ
+        "hard_test_issues":   [],   # ← THÊM
+        "timeout_issues":     [],
         "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
     }

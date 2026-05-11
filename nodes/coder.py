@@ -3,6 +3,7 @@ import ast
 import re
 import os
 from langchain_ollama import OllamaLLM
+from multi_agent_pipeline import state
 from state import AgentState
 from utils import log_step, save_code, clean_code
 from nodes.task_config import TASK_TYPES
@@ -90,12 +91,19 @@ def _run_coder(state: AgentState, task_type: str) -> str:
     test_issues    = state.get("test_issues", [])
     my_test_issues = [i for i in test_issues if f"[{task_type}]" in i]
 
+    # THÊM: đọc riêng timeout để biết cần tối ưu
+    timeout_issues    = state.get("timeout_issues", [])
+    my_timeout_issues = [i for i in timeout_issues if f"[{task_type}]" in i]
+
+    hard_issues    = state.get("hard_test_issues", [])
+    my_hard_issues = [i for i in hard_issues if f"[{task_type}]" in i]
+
     folder = f"output/iteration_{iteration}"
     os.makedirs(folder, exist_ok=True)
 
     # ── Xác định tình huống ─────────────────────────────────────────
-    has_error    = (prev_feedback.get("status") == "error") or bool(my_test_issues)
-    has_fix_hint = bool(fix_instruction)
+    has_error      = (prev_feedback.get("status") == "error") or bool(my_hard_issues)
+    has_fix_hint   = bool(fix_instruction) or bool(my_timeout_issues)
     is_first_run = not prev_code
 
     if is_first_run:
@@ -171,6 +179,14 @@ Fix every error listed above. Return ONLY the corrected Python code.
         # ── CASE C: Không lỗi nhưng evaluator muốn cải thiện ───────
         log_step(iteration, f"CODER {task_type}",
                  f"⚡ Cải thiện theo evaluator: {fix_instruction[:80]}")
+        timeout_note = ""
+    if my_timeout_issues:
+        timeout_note = f"""
+PERFORMANCE ISSUE — tests timed out (> 30s):
+{chr(10).join(my_timeout_issues)}
+Optimize: reduce complexity, avoid nested loops O(n²)+, add early returns,
+use generators instead of lists where possible.
+"""
         prompt = f"""
 {STRICT_CODE_INSTRUCTION}
 
@@ -184,6 +200,7 @@ IMPROVEMENT NEEDED:
 
 Return ONLY the improved Python code.
 """
+        
 
     else:
         # ── CASE D: Code tốt, không có gì cần làm → GIỮ NGUYÊN ────

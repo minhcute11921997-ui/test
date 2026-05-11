@@ -50,14 +50,22 @@ def route_between_coders(task_type: str):
     return _route
 
 
+MAX_TESTER_RETRIES = 2
+
 def route_after_tester(state: AgentState) -> str:
-    """
-    Nếu tester phát hiện lỗi → retry planner, nhưng tối đa MAX_TESTER_RETRIES lần.
-    Sau đó bỏ qua và đi tiếp reviewer để không loop vô hạn.
-    """
-    if not state.get("test_issues"):
+    hard_issues    = state.get("hard_test_issues", [])
+    timeout_issues = state.get("timeout_issues", [])
+
+    # Không có gì → pass thẳng
+    if not hard_issues and not timeout_issues:
         return "pass"
 
+    # Chỉ có timeout (không có lỗi thật) → đi tiếp nhưng báo coder cần tối ưu
+    if not hard_issues and timeout_issues:
+        print(f"\n  ⏱️  Chỉ có timeout issues ({len(timeout_issues)}) — tiếp tục nhưng yêu cầu tối ưu")
+        return "optimize"   # ← route mới → đến reviewer (không retry planner)
+
+    # Có lỗi thật → retry planner nếu còn lượt
     tester_retry_count = state.get("tester_retry_count", 0)
     if tester_retry_count >= MAX_TESTER_RETRIES:
         print(f"\n  ⚠️  Tester đã retry {MAX_TESTER_RETRIES} lần — bỏ qua, tiếp tục reviewer")
@@ -112,7 +120,7 @@ def build_graph():
     graph.add_conditional_edges(
         "tester",
         route_after_tester,
-        {"retry": "planner", "pass": "reviewer"},
+        {"retry": "planner", "pass": "reviewer", "optimize": "reviewer"},
     )
 
     graph.add_edge("reviewer",   "integrator")

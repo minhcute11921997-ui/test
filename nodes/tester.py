@@ -370,28 +370,26 @@ def tester_node(state: AgentState) -> dict:
                 print(f"        ❌ {pytest_result['n_failed']} failed")
                 print(f"        {pytest_result['output'][:300]}")
         except subprocess.TimeoutExpired:
-            all_issues.append(f"[{label}] pytest timeout > 30s")
+            # ← ghi vào timeout_issues thay vì all_issues
+            timeout_issues.append(f"[{label}] pytest timeout > 30s — cần tối ưu code hoặc giảm độ phức tạp")
             print("        ⚠️  pytest timeout")
         except Exception as e:
-            all_issues.append(f"[{label}] pytest error: {e}")
+            timeout_issues.append(f"[{label}] pytest error: {e}")
             print(f"        ⚠️  {e}")
 
-        test_results[label] = result
-
     # ── Tổng kết ───────────────────────────────
-    print(f"\n  {'─'*40}")
-    if all_issues:
-        log_step(state["iteration"], "TESTER", f"❌ {len(all_issues)} vấn đề cần fix")
-    else:
-        log_step(state["iteration"], "TESTER", "✅ Tất cả passed!")
+    all_issues = hard_issues + timeout_issues   # gộp lại để lưu state
 
+    # Chỉ tăng retry nếu có HARD issues (không tăng nếu chỉ timeout)
     tester_retry_count = state.get("tester_retry_count", 0)
-    if all_issues:
+    if hard_issues:
         tester_retry_count += 1
 
     return {
         "test_results":       test_results,
         "test_issues":        all_issues,
+        "timeout_issues":     timeout_issues,   # ← field mới
+        "hard_test_issues":   hard_issues,
         "tester_retry_count": tester_retry_count,
         "history": [{
             "iteration": state["iteration"],

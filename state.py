@@ -59,6 +59,8 @@ class AgentState(TypedDict):
     # ── Tester ────────────────────────────────────
     test_results:       dict
     test_issues:        list
+    hard_test_issues:   list   # ← THÊM: lỗi thật
+    timeout_issues:     list
     tester_retry_count: int
 
 
@@ -104,6 +106,8 @@ def create_initial_state(user_request: str, auto_mode: bool = False) -> AgentSta
 
         test_results       = {},
         test_issues        = [],
+        hard_test_issues   = [],
+        timeout_issues     = [],
         tester_retry_count = 0,
         complexity         = "",
     )
