@@ -7,6 +7,7 @@ import threading
 from langchain_ollama import OllamaLLM
 from state import AgentState
 from utils import log_step
+from nodes.task_config import TASK_TYPES
 
 llm = OllamaLLM(
     model="qwen2.5:14b",
@@ -39,17 +40,51 @@ def check_syntax(code: str, label: str) -> dict:
 # LỚP 2 — STATIC ANALYSIS
 # ══════════════════════════════════════════════
 
-STATIC_RULES = [
-    (r"CREATE TABLE IF NOT EXISTS",          "Thiếu init_db() — không có CREATE TABLE"),
-    (r"\.get\(['\"](?:name|price|stock|id)", "Dùng dict.get() thay vì dict['key'] — tránh KeyError"),
-    (r"with sqlite3\.connect",               "Không dùng context manager (with) cho sqlite3"),
-    (r"except",                              "Thiếu xử lý exception"),
+# Mỗi rule: (pattern_phải_có, message_nếu_thiếu)
+# Logic đúng: nếu pattern KHÔNG tìm thấy → báo lỗi
+STATIC_RULES_BY_TYPE = {
+    "DB": [
+        (r"def \w+",                "Không có hàm nào được định nghĩa trong DB module"),
+        (r"sqlite3|sqlalchemy|psycopg2|pymongo",
+                                    "Không tìm thấy import thư viện database"),
+        (r"try\s*:|except\s+",      "Thiếu error handling (try/except) trong DB operations"),
+    ],
+    "UI": [
+        (r"def \w+",                "Không có hàm nào được định nghĩa trong UI module"),
+        (r"input\(|flask|fastapi|streamlit|tkinter|PyQt",
+                                    "Không tìm thấy UI framework hoặc input handler"),
+    ],
+    "API": [
+        (r"@app\.|@router\.|def \w+_route|def \w+_handler|def \w+_endpoint",
+                                    "Không tìm thấy route/endpoint definitions"),
+        (r"flask|fastapi|aiohttp|django",
+                                    "Không tìm thấy web framework import"),
+    ],
+    "AUTH": [
+        (r"def \w*(login|logout|register|verify|authenticate|token)\w*",
+                                    "Không tìm thấy hàm authentication"),
+        (r"password|token|jwt|session|hash",
+                                    "Không tìm thấy xử lý credentials/token"),
+    ],
+    "TEST": [
+        (r"def test_\w+",           "Không tìm thấy test functions (def test_...)"),
+        (r"assert ",                "Không có assert statements trong tests"),
+    ],
+}
+
+# Rules áp dụng cho mọi module
+STATIC_RULES_COMMON = [
+    (r"^(import |from )",           "Không có import statement nào"),
 ]
 
-def check_static(code: str) -> list:
+
+def check_static(code: str, task_type: str) -> list:
     issues = []
-    for pattern, message in STATIC_RULES:
-        if not re.search(pattern, code):
+    type_rules   = STATIC_RULES_BY_TYPE.get(task_type, [])
+    common_rules = STATIC_RULES_COMMON
+
+    for pattern, message in (common_rules + type_rules):
+        if not re.search(pattern, code, re.MULTILINE):
             issues.append(f"⚠️  {message}")
     return issues
 
@@ -81,7 +116,6 @@ def generate_fallback_test(source_code: str) -> str:
     """Sinh test tối thiểu không cần LLM — dựa trên def có trong code"""
     funcs = re.findall(r"^def (\w+)\(", source_code, re.MULTILINE)
     lines = [
-        "import sqlite3",
         "import sys, os",
         "sys.path.insert(0, os.path.dirname(__file__))",
         "import module",
@@ -118,7 +152,6 @@ CODE ({label}):
 
 
 def generate_test_code(source_code: str, label: str, timeout: int = 60) -> str:
-    """Gọi LLM sinh test với timeout — fallback nếu quá chậm"""
     result_box = [""]
     error_box  = [None]
 
@@ -145,7 +178,6 @@ def generate_test_code(source_code: str, label: str, timeout: int = 60) -> str:
 
 def run_pytest(source_code: str, test_code: str) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Patch db path → :memory:
         patched = re.sub(
             r"sqlite3\.connect\(['\"].*?\.db['\"]\)",
             "sqlite3.connect(':memory:')",
@@ -179,19 +211,33 @@ def run_pytest(source_code: str, test_code: str) -> dict:
 # NODE CHÍNH
 # ══════════════════════════════════════════════
 
-def tester_node(state: AgentState) -> AgentState:
+def tester_node(state: AgentState) -> dict:
     log_step(state["iteration"], "TESTER", "Bắt đầu kiểm tra code 3 lớp...")
 
     all_issues:   list = []
     test_results: dict = {}
 
-    targets = [
-        ("UI", state.get("code_ui", "")),
-        ("DB", state.get("code_db", "")),
-    ]
+    # ── Động theo active_task_types (không hardcode UI+DB) ───
+    active_types = state.get("active_task_types", ["UI", "DB"])
+    targets = []
+    for task_type in active_types:
+        config     = TASK_TYPES.get(task_type, {})
+        code_field = config.get("state_field", f"code_{task_type.lower()}")
+        code       = state.get(code_field, "")
+        targets.append((task_type, code))
+
+    if not targets:
+        log_step(state["iteration"], "TESTER", "⚠️ Không có module nào để test")
+        return {
+            "test_results": {},
+            "test_issues":  ["Không có code để test"],
+            "history": [{"iteration": state["iteration"], "node": "TESTER",
+                         "content": {"issues_count": 0, "issues": []}}],
+        }
 
     for label, code in targets:
         if not code.strip():
+            print(f"  ⚠️  [{label}] rỗng — bỏ qua")
             continue
 
         print(f"\n  {'─'*40}")
@@ -211,7 +257,7 @@ def tester_node(state: AgentState) -> AgentState:
 
         # ── Lớp 2: Static + pylint ─────────────
         print("  [2/3] Static analysis...")
-        static = check_static(code)
+        static = check_static(code, label)    # ← truyền task_type
         pylint = check_pylint(code, label)
         result["static"] = static
         result["pylint"] = pylint
@@ -252,30 +298,33 @@ def tester_node(state: AgentState) -> AgentState:
     # ── Tổng kết ───────────────────────────────
     print(f"\n  {'─'*40}")
     if all_issues:
-        log_step(state["iteration"], "TESTER",
-                 f"❌ {len(all_issues)} vấn đề cần fix")
+        log_step(state["iteration"], "TESTER", f"❌ {len(all_issues)} vấn đề cần fix")
     else:
         log_step(state["iteration"], "TESTER", "✅ Tất cả passed!")
 
-    history = state.get("history", [])
-    history.append({
-        "iteration": state["iteration"],
-        "node":      "TESTER",
-        "content": {
-            "issues_count": len(all_issues),
-            "issues":       all_issues,
-            "results": {
-                k: {
-                    "syntax_ok": v.get("syntax", {}).get("passed", False),
-                    "pytest_ok": v.get("pytest", {}).get("passed", False),
-                }
-                for k, v in test_results.items()
-            }
-        }
-    })
+    # Tăng retry counter nếu có lỗi (dùng để giới hạn vòng tester→planner)
+    tester_retry_count = state.get("tester_retry_count", 0)
+    if all_issues:
+        tester_retry_count += 1
 
     return {
-        "test_results": test_results,
-        "test_issues":  all_issues,
-        "history":      history,
+        "test_results":       test_results,
+        "test_issues":        all_issues,
+        "tester_retry_count": tester_retry_count,
+        # ← Chỉ entry MỚI
+        "history": [{
+            "iteration": state["iteration"],
+            "node":      "TESTER",
+            "content": {
+                "issues_count": len(all_issues),
+                "issues":       all_issues,
+                "results": {
+                    k: {
+                        "syntax_ok": v.get("syntax", {}).get("passed", False),
+                        "pytest_ok": v.get("pytest", {}).get("passed", False),
+                    }
+                    for k, v in test_results.items()
+                }
+            }
+        }],
     }

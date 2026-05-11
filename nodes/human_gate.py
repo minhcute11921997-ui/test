@@ -1,11 +1,14 @@
 # nodes/human_gate.py
-from state import AgentState, log_to_history
-from utils import log_step
 import json
+from state import AgentState
+from utils import log_step
+from nodes.task_config import TASK_TYPES
+
 
 def human_gate_node(state: AgentState) -> dict:
-    iteration = state["iteration"]
-    plan = state["current_plan"]
+    iteration    = state["iteration"]
+    plan         = state["current_plan"]
+    active_types = state.get("active_task_types", [])
 
     print(f"\n{'🔵'*25}")
     print(f"  HUMAN CHECKPOINT — Vòng {iteration}")
@@ -13,10 +16,22 @@ def human_gate_node(state: AgentState) -> dict:
     print(f"\n📋 Plan hiện tại:")
     print(json.dumps(plan, indent=2, ensure_ascii=False))
 
-    if state.get("feedback_ui") or state.get("feedback_db"):
-        print(f"\n📝 Feedback vòng trước:")
-        print(f"  UI: {state.get('feedback_ui', {})}")
-        print(f"  DB: {state.get('feedback_db', {})}")
+    # ── Hiển thị feedback động theo active_task_types ────────
+    has_feedback = False
+    for task_type in active_types:
+        config   = TASK_TYPES.get(task_type, {})
+        fb_field = config.get("feedback_field", f"feedback_{task_type.lower()}")
+        fb       = state.get(fb_field, {})
+        if fb:
+            if not has_feedback:
+                print(f"\n📝 Feedback vòng trước:")
+                has_feedback = True
+            status = fb.get("status", "unknown")
+            score  = fb.get("quality_score", "?")
+            icon   = "✅" if status == "ok" else "❌"
+            print(f"  {icon} [{task_type}] status={status} score={score}/10")
+            for issue in fb.get("issues", [])[:3]:   # chỉ in 3 issue đầu
+                print(f"     • {issue}")
 
     print(f"\n{'─'*50}")
     print("  [Enter] → Tiếp tục | [s] → Dừng | [text] → Thêm yêu cầu")
@@ -39,13 +54,10 @@ def human_gate_node(state: AgentState) -> dict:
         extra_requirement = decision
         log_step(iteration, "HUMAN GATE", f"📝 Yêu cầu thêm: {decision}")
 
-    history = state.get("history", [])
-    history.append({"iteration": iteration, "node": "HUMAN GATE", "content": human_decision})
-
-    # ← Chỉ trả về field thay đổi
     return {
-    "status":            status,
-    "human_decision":    human_decision,
-    "extra_requirement": extra_requirement,
-    "history": [{"iteration": iteration, "node": "HUMAN GATE", "content": human_decision}],
-}
+        "status":            status,
+        "human_decision":    human_decision,
+        "extra_requirement": extra_requirement,
+        # ← Chỉ entry MỚI, không get history cũ
+        "history": [{"iteration": iteration, "node": "HUMAN GATE", "content": human_decision}],
+    }

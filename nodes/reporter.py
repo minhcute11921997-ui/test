@@ -2,9 +2,10 @@
 import os
 from datetime import datetime
 from langchain_ollama import OllamaLLM
-from state import AgentState, log_to_history
+from state import AgentState
 from utils import log_step
 from memory.memory_manager import save_template, save_patterns
+from nodes.task_config import TASK_TYPES
 
 llm = OllamaLLM(
     model="qwen2.5:14b",
@@ -12,10 +13,7 @@ llm = OllamaLLM(
 )
 
 
-# ── Các hàm tạo từng phần báo cáo ────────────────────────────
-
 def _summary_section(state: AgentState) -> str:
-    """LLM tóm tắt những gì đã làm được"""
     prompt = f"""
 You are a technical writer. Write a concise project summary in Vietnamese.
 
@@ -35,98 +33,104 @@ Return plain text only, no JSON, no markdown headers.
 
 
 def _iteration_table(state: AgentState) -> str:
-    """Tạo bảng tóm tắt từng vòng lặp từ history"""
-    rows = []
-    rows.append("| Vòng | Node | Nội dung |")
-    rows.append("|------|------|----------|")
-
+    rows = [
+        "| Vòng | Node | Nội dung |",
+        "|------|------|----------|",
+    ]
     for entry in state["history"]:
         iteration = entry.get("iteration", "?")
         node      = entry.get("node", "?")
         content   = str(entry.get("content", ""))[:80].replace("\n", " ")
         rows.append(f"| {iteration} | {node} | {content} |")
-
     return "\n".join(rows)
 
 
 def _quality_table(state: AgentState) -> str:
-    """Bảng điểm chất lượng từng vòng"""
-    # Lấy tất cả feedback từ history
-    rows = []
-    rows.append("| Vòng | Module | Syntax | Pylint | LLM | Score | Status |")
-    rows.append("|------|--------|--------|--------|-----|-------|--------|")
+    """Bảng điểm chất lượng — động theo active_task_types"""
+    rows = [
+        "| Vòng | Module | Syntax | Pylint | LLM | Score | Status |",
+        "|------|--------|--------|--------|-----|-------|--------|",
+    ]
 
     for entry in state["history"]:
-        if entry.get("node") == "REVIEWER":
-            content = entry.get("content", {})
-            if isinstance(content, dict):
-                iteration = entry.get("iteration", "?")
-                for task_type, fb in [("UI", content.get("feedback_ui", {})),
-                                       ("DB", content.get("feedback_db", {}))]:
-                    if fb:
-                        syntax  = "✅" if fb.get("passed_syntax") else "❌"
-                        pylint  = "✅" if fb.get("passed_pylint") else "❌"
-                        llm_r   = "✅" if fb.get("llm_review") == "ok" else "❌"
-                        score   = fb.get("quality_score", "?")
-                        status  = fb.get("status", "?")
-                        rows.append(f"| {iteration} | {task_type} | {syntax} | {pylint} | {llm_r} | {score}/10 | {status} |")
+        if entry.get("node") != "REVIEWER":
+            continue
+        content = entry.get("content", {})
+        if not isinstance(content, dict):
+            continue
 
+        iteration = entry.get("iteration", "?")
+        # Duyệt tất cả key feedback_* trong content
+        for key, fb in content.items():
+            if not key.startswith("feedback_") or not isinstance(fb, dict):
+                continue
+            task_type = key.replace("feedback_", "").upper()
+            syntax = "✅" if fb.get("passed_syntax") else "❌"
+            pylint = "✅" if fb.get("passed_pylint") else "❌"
+            llm_r  = "✅" if fb.get("llm_review") == "ok" else "❌"
+            score  = fb.get("quality_score", "?")
+            status = fb.get("status", "?")
+            rows.append(f"| {iteration} | {task_type} | {syntax} | {pylint} | {llm_r} | {score}/10 | {status} |")
+
+    if len(rows) == 2:
+        rows.append("| — | — | — | — | — | — | Chưa có dữ liệu |")
     return "\n".join(rows)
 
 
-
-
 def _issues_section(state: AgentState) -> str:
-    """Liệt kê tất cả lỗi đã gặp và cách fix"""
+    """Liệt kê lỗi từ tất cả module — động"""
     sections = []
 
     for entry in state["history"]:
-        if entry.get("node") == "REVIEWER":
-            content = entry.get("content", {})
-            if isinstance(content, dict):
-                iteration = entry.get("iteration", "?")
-                for task_type, fb in [("UI", content.get("feedback_ui", {})),
-                                       ("DB", content.get("feedback_db", {}))]:
-                    if fb and fb.get("issues"):
-                        sections.append(f"\n**Vòng {iteration} — {task_type}:**")
-                        for issue in fb["issues"]:
-                            sections.append(f"- ❌ {issue}")
-                        for suggestion in fb.get("suggestions", []):
-                            sections.append(f"  → 💡 {suggestion}")
+        if entry.get("node") != "REVIEWER":
+            continue
+        content = entry.get("content", {})
+        if not isinstance(content, dict):
+            continue
+
+        iteration = entry.get("iteration", "?")
+        for key, fb in content.items():
+            if not key.startswith("feedback_") or not isinstance(fb, dict):
+                continue
+            if not fb.get("issues"):
+                continue
+            task_type = key.replace("feedback_", "").upper()
+            sections.append(f"\n**Vòng {iteration} — {task_type}:**")
+            for issue in fb["issues"]:
+                sections.append(f"- ❌ {issue}")
+            for suggestion in fb.get("suggestions", []):
+                sections.append(f"  → 💡 {suggestion}")
 
     return "\n".join(sections) if sections else "_Không có lỗi nào được ghi nhận._"
 
 
 def _code_section(state: AgentState) -> str:
-    """Hiển thị code cuối cùng"""
-    iteration = state["iteration"]
-    ui_file   = f"output/iteration_{iteration}/ui_code.py"
-    db_file   = f"output/iteration_{iteration}/db_code.py"
+    """Hiển thị code cuối cùng — động theo active_task_types"""
+    iteration    = state["iteration"]
+    active_types = state.get("active_task_types", ["UI", "DB"])
+    sections     = []
 
-    sections = []
-
-    for label, filepath in [("UI", ui_file), ("DB", db_file)]:
-        sections.append(f"\n### {label} Code\n")
-        if os.path.exists(filepath):
-            with open(filepath, "r", encoding="utf-8") as f:
+    for task_type in active_types:
+        config   = TASK_TYPES.get(task_type, {})
+        fname    = f"output/iteration_{iteration}/{task_type.lower()}_code.py"
+        sections.append(f"\n### {task_type} — {config.get('desc', '')}\n")
+        if os.path.exists(fname):
+            with open(fname, "r", encoding="utf-8") as f:
                 code = f.read()
             sections.append(f"```python\n{code}\n```")
         else:
-            sections.append("_File không tìm thấy._")
+            sections.append(f"_File không tìm thấy: `{fname}`_")
 
     return "\n".join(sections)
 
 
 def _context_section(state: AgentState) -> str:
-    """Thông tin context dự án nếu có"""
     if not state.get("context_summary"):
         return "_Không có context dự án._"
     return state["context_summary"]
 
 
-# ── Node chính ────────────────────────────────────────────────
-
-def reporter_node(state: AgentState) -> AgentState:
+def reporter_node(state: AgentState) -> dict:
     log_step(state["iteration"], "REPORTER", "Đang tạo báo cáo tự động...")
 
     timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -135,7 +139,6 @@ def reporter_node(state: AgentState) -> AgentState:
     os.makedirs(out_folder, exist_ok=True)
     os.makedirs("reports", exist_ok=True)
 
-    # ── Tạo từng phần ──
     print("  📝 Đang tóm tắt kết quả...")
     summary = _summary_section(state)
 
@@ -153,7 +156,7 @@ def reporter_node(state: AgentState) -> AgentState:
 
     context = _context_section(state)
 
-    # ── Ghép thành file .md ──
+    active_types = state.get("active_task_types", [])
     report = f"""# 📋 BÁO CÁO PIPELINE — {timestamp}
 
 ---
@@ -161,6 +164,7 @@ def reporter_node(state: AgentState) -> AgentState:
 ## 1. Tổng quan
 
 **Yêu cầu:** {state['user_request']}
+**Modules:** {', '.join(active_types)}
 **Tổng vòng lặp:** {state['iteration']}
 **Trạng thái cuối:** {state['status']}
 **Thời gian:** {timestamp}
@@ -212,29 +216,20 @@ def reporter_node(state: AgentState) -> AgentState:
 _Báo cáo được tạo tự động bởi Multi-Agent Pipeline_
 """
 
-    # ── Lưu file ──
     report_path = f"reports/report_{date_file}.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
 
     log_step(state["iteration"], "REPORTER", f"✅ Báo cáo đã lưu: {report_path}")
 
-     # ── Lưu memory nếu pipeline thành công ──────────────────
     if state["status"] == "done":
         print("\n  🧠 Lưu memory...")
-        save_template(
-            request = state["user_request"],
-            plan    = state["current_plan"],
-        )
-        save_patterns(
-            history = state["history"],   # ← toàn bộ history các vòng
-        )
+        save_template(request=state["user_request"], plan=state["current_plan"])
+        save_patterns(history=state["history"])
         print("  ✅ Memory đã cập nhật")
-    # ────────────────────────────────────────────────────────
-    history = state.get("history", [])
-    history.append({"iteration": state["iteration"], "node": "REPORTER", "content": report_path})
 
-    # ← Chỉ trả về field thay đổi
+    # ← Chỉ entry MỚI
     return {
-    "history": history
-}
+        "history": [{"iteration": state["iteration"], "node": "REPORTER",
+                     "content": report_path}]
+    }
