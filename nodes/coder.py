@@ -52,7 +52,7 @@ def extract_multiple_files(raw_output: str) -> dict | None:
     ```python / ```text / ```bash
     ...content...
     ```
-    Trả về dict {filename: content} nếu có, None nếu chỉ có 1 file.
+    Trả về dict {filename: content} nếu có >= 2 file, None nếu chỉ 1 file.
     """
     pattern = r"###\s*([\w./\-]+\.\w+)\s*\n```(?:python|text|bash|sql|html|css|js)?\s*\n(.*?)```"
     matches = re.findall(pattern, raw_output, re.DOTALL)
@@ -82,60 +82,22 @@ def _run_coder(state: AgentState, task_type: str) -> str:
     if new_plan:
         fix_instruction = new_plan.get(f"fix_{task_type.lower()}", "")
 
-    folder   = f"output/iteration_{iteration}"
+    # ── Thu thập lỗi từ tester ──────────────────────────────────────
+    test_issues    = state.get("test_issues", [])
+    my_test_issues = [i for i in test_issues if f"[{task_type}]" in i]
+
+    folder = f"output/iteration_{iteration}"
     os.makedirs(folder, exist_ok=True)
 
-    # ── Xây dựng prompt theo tình huống ─────────────────────
-    if prev_code and prev_feedback.get("status") == "error":
-        # Vòng 2+: có lỗi cần sửa
-        prompt = f"""
-{STRICT_CODE_INSTRUCTION}
+    # ── Xác định tình huống ─────────────────────────────────────────
+    has_error    = (prev_feedback.get("status") == "error") or bool(my_test_issues)
+    has_fix_hint = bool(fix_instruction)
+    is_first_run = not prev_code
 
-You are an expert Python developer fixing buggy code.
-
-PREVIOUS CODE WITH ISSUES:
-{prev_code}
-
-ISSUES FOUND:
-{prev_feedback.get('issues', [])}
-
-SUGGESTIONS:
-{prev_feedback.get('suggestions', [])}
-
-FIX INSTRUCTION:
-{fix_instruction}
-
-Fix the code above. Return ONLY the fixed Python code.
-"""
-
-    elif prev_code and prev_feedback.get("status") == "ok" and fix_instruction:
-        # Vòng 2+: code ok nhưng cần cải thiện theo yêu cầu mới
-        prompt = f"""
-{STRICT_CODE_INSTRUCTION}
-
-You are an expert Python developer improving existing code.
-
-CURRENT CODE:
-{prev_code}
-
-IMPROVEMENT NEEDED:
-{fix_instruction}
-
-Return ONLY the improved Python code.
-"""
-
-    elif prev_code and not fix_instruction:
-        # ── FIX VẤN ĐỀ 1: code vòng trước ok, không có gì cần sửa → GIỮ NGUYÊN ──
-        log_step(iteration, f"CODER {task_type}",
-                 f"♻️  Giữ nguyên code vòng trước — không có lỗi và không có yêu cầu mới")
-        filename = f"{folder}/{task_type.lower()}_code.py"
-        save_code(prev_code, filename)
-        return prev_code
-
-    else:
-        # Vòng 1: viết mới
+    if is_first_run:
+        # ── CASE A: Vòng 1 — viết mới ──────────────────────────────
+        log_step(iteration, f"CODER {task_type}", f"✍️ Viết mới: {task['name']}")
         cross_context = _build_cross_context(state, task_type)
-
         existing  = state.get("existing_code", {})
         keywords  = {
             "UI":   ["ui", "view", "template", "html", "frontend"],
@@ -151,7 +113,6 @@ Return ONLY the improved Python code.
                 relevant_code += f"\n# EXISTING: {fname}\n{code[:600]}\n"
 
         context = state.get("context_summary", "")
-
         prompt = f"""
 {STRICT_CODE_INSTRUCTION}
 
@@ -173,22 +134,73 @@ Also create a requirements.txt listing all pip packages used.
 Return each file separately using the ### filename format described above.
 """
 
-    log_step(iteration, f"CODER {task_type}",
-             f"{'🔧 Sửa lỗi' if prev_code else '✍️ Viết mới'}: {task['name']}...")
+    elif has_error:
+        # ── CASE B: Có lỗi (từ reviewer HOẶC tester) → phải sửa ───
+        log_step(iteration, f"CODER {task_type}",
+                 f"🔧 Sửa lỗi — reviewer_err={prev_feedback.get('status')=='error'}, "
+                 f"tester_issues={len(my_test_issues)}")
+        error_detail = ""
+        if prev_feedback.get("status") == "error":
+            error_detail += f"Reviewer issues: {prev_feedback.get('issues', [])}\n"
+            error_detail += f"Reviewer suggestions: {prev_feedback.get('suggestions', [])}\n"
+        if my_test_issues:
+            error_detail += "Tester issues:\n" + "\n".join(my_test_issues)
+
+        prompt = f"""
+{STRICT_CODE_INSTRUCTION}
+
+You are an expert Python developer fixing buggy code.
+
+PREVIOUS CODE WITH ISSUES:
+{prev_code}
+
+ERRORS FOUND (must fix ALL of these):
+{error_detail}
+
+{"ADDITIONAL FIX INSTRUCTION:" if has_fix_hint else ""}
+{fix_instruction if has_fix_hint else ""}
+
+Fix every error listed above. Return ONLY the corrected Python code.
+"""
+
+    elif has_fix_hint:
+        # ── CASE C: Không lỗi nhưng evaluator muốn cải thiện ───────
+        log_step(iteration, f"CODER {task_type}",
+                 f"⚡ Cải thiện theo evaluator: {fix_instruction[:80]}")
+        prompt = f"""
+{STRICT_CODE_INSTRUCTION}
+
+You are an expert Python developer improving existing code.
+
+CURRENT CODE:
+{prev_code}
+
+IMPROVEMENT NEEDED:
+{fix_instruction}
+
+Return ONLY the improved Python code.
+"""
+
+    else:
+        # ── CASE D: Code tốt, không có gì cần làm → GIỮ NGUYÊN ────
+        log_step(iteration, f"CODER {task_type}",
+                 "♻️  Giữ nguyên — không có lỗi và không có yêu cầu mới")
+        filename = f"{folder}/{task_type.lower()}_code.py"
+        save_code(prev_code, filename)
+        return prev_code
 
     # ── Gọi LLM với retry nếu syntax lỗi ────────────────────
     raw  = ""
     code = ""
     for attempt in range(1, MAX_RETRIES + 1):
-        raw  = llm_coder.invoke(prompt)
+        raw = llm_coder.invoke(prompt)
 
-        # ── FIX VẤN ĐỀ 3: kiểm tra multi-file trước ──
+        # Kiểm tra multi-file trước
         multi = extract_multiple_files(raw)
         if multi:
             print(f"  📁 LLM trả về {len(multi)} files: {list(multi.keys())}")
             for fname, content in multi.items():
                 save_code(content, f"{folder}/{fname}")
-            # file chính là file .py đầu tiên không phải requirements
             main_file = next(
                 (v for k, v in multi.items() if k.endswith(".py") and "requirement" not in k),
                 list(multi.values())[0]
@@ -206,7 +218,6 @@ Return each file separately using the ### filename format described above.
 
         except SyntaxError as e:
             print(f"  ⚠️ Attempt {attempt}/{MAX_RETRIES} — SyntaxError: {e.msg} dòng {e.lineno}")
-
             if attempt < MAX_RETRIES:
                 prompt = f"""
 {STRICT_CODE_INSTRUCTION}
@@ -225,7 +236,6 @@ Fix the syntax error and return ONLY the corrected Python code.
 
     filename = f"{folder}/{task_type.lower()}_code.py"
     save_code(code, filename)
-
     log_step(iteration, f"CODER {task_type}", f"✅ Xong — {filename}")
     return code
 
