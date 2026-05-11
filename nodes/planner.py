@@ -107,13 +107,62 @@ Important rules:
 Return ONLY this JSON structure, no explanation:
 {{
   "complexity": "{complexity}",
+  "module_contracts": {{
+    "DB": {{
+      "exposes": ["function_name(arg: type) -> return_type"],
+      "owns_tables": ["table_name (col1 TYPE, col2 TYPE)"]
+    }},
+    "API": {{
+      "exposes": ["GET /route → description", "POST /route → description"],
+      "calls": ["DB.function_name"]
+    }},
+    "UI": {{
+      "calls": ["API GET /route", "API POST /route"]
+    }},
+    "AUTH": {{
+      "exposes": ["login(u,p)->token", "verify_token(t)->user"],
+      "calls": ["DB.get_user_by_username"]
+    }},
+    "TEST": {{
+      "verifies": ["DB.insert", "API POST /route"]
+    }}
+  }},
   "tasks": [
-    {{"id": 1, "name": "Task name", "type": "UI",  "description": "what to build"}},
-    {{"id": 2, "name": "Task name", "type": "DB",  "description": "what to build"}},
-    {{"id": 3, "name": "Task name", "type": "API", "description": "what to build"}}
+    {{
+      "id": 1,
+      "name": "Task name",
+      "type": "UI",
+      "description": "what to build in 1-2 sentences",
+      "required_functions": [
+        "function_name(arg: type, arg2: type) -> return_type"
+      ],
+      "required_endpoints": [],
+      "data_contract": {{
+        "InputName": "{{'field': 'type'}}",
+        "OutputName": "{{'field': 'type'}}"
+      }},
+      "acceptance_criteria": [
+        "returns 404 if item not found",
+        "validates all required fields before insert"
+      ],
+      "edge_cases": [
+        "empty input",
+        "invalid type"
+      ]
+    }}
   ]
 }}
+
+Rules for tasks:
+- module_contracts: chỉ điền modules thực sự có trong tasks
+- required_functions: tối thiểu 3 hàm với signature đầy đủ, tên cụ thể theo domain
+- required_endpoints: chỉ điền cho API/AUTH, để [] cho UI/DB/TEST
+- data_contract: shape của object truyền giữa modules, tên cụ thể
+- acceptance_criteria: 2-4 điều kiện testable, cụ thể
+- edge_cases: 2-3 trường hợp biên cần handle
 """
+   
+
 
     log_step(iteration, "PLANNER", "Đang tạo plan...")
     response = llm.invoke(prompt)
@@ -122,9 +171,14 @@ Return ONLY this JSON structure, no explanation:
     if not plan or "tasks" not in plan:
         plan = {
             "complexity": complexity,
+            "module_contracts": {},
             "tasks": [
-                {"id": 1, "name": "Build UI",      "type": "UI", "description": "Basic UI"},
-                {"id": 2, "name": "Build Database", "type": "DB", "description": "Basic DB"},
+                {"id": 1, "name": "Build UI",      "type": "UI", "description": "Basic UI",
+                 "required_functions": [], "required_endpoints": [],
+                 "data_contract": {}, "acceptance_criteria": [], "edge_cases": []},
+                {"id": 2, "name": "Build Database", "type": "DB", "description": "Basic DB",
+                 "required_functions": [], "required_endpoints": [],
+                 "data_contract": {}, "acceptance_criteria": [], "edge_cases": []},
             ]
         }
         log_step(iteration, "PLANNER", "⚠️ JSON lỗi — dùng fallback plan")
@@ -149,10 +203,11 @@ Return ONLY this JSON structure, no explanation:
         "current_plan":       plan,
         "original_plan":      original_plan,
         "active_task_types":  active_types,
-        "complexity":         complexity,    # ← lưu vào state để vòng sau tái dụng
-        "tester_retry_count": 0,             # ← reset mỗi vòng mới, không chỉ khi all_ok
-        "test_issues":        [],  # ← reset để CASE B không đọc lỗi cũ
-        "test_results":       [],  # ← reset để CASE B không đọc kết quả cũ
+        "complexity":         complexity,
+        "module_contracts":   plan.get("module_contracts", {}), 
+        "tester_retry_count": 0,
+        "test_issues":        [],
+        "test_results":       [],
         "hard_test_issues": [] if not is_retry else state.get("hard_test_issues", []),
         "timeout_issues":   [] if not is_retry else state.get("timeout_issues", []),
         "history": [{"iteration": iteration, "node": "PLANNER", "content": str(plan)}],
