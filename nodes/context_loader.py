@@ -7,7 +7,7 @@ from utils import log_step
 import sqlite3
 
 llm = OllamaLLM(
-    model="qwen2.5:9b",
+    model="qwen3.5:9b",
     temperature=0.1,
 )
 
