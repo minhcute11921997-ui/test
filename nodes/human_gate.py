@@ -9,9 +9,12 @@ def human_gate_node(state: AgentState) -> dict:
     iteration    = state["iteration"]
     plan         = state["current_plan"]
     active_types = state.get("active_task_types", [])
+    auto_mode    = state.get("auto_mode", False)   # ← đọc auto_mode
 
     print(f"\n{'🔵'*25}")
     print(f"  HUMAN CHECKPOINT — Vòng {iteration}")
+    if auto_mode:
+        print(f"  ⚡ AUTO MODE — bỏ qua checkpoint")
     print(f"{'🔵'*25}")
     print(f"\n📋 Plan hiện tại:")
     print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -30,9 +33,21 @@ def human_gate_node(state: AgentState) -> dict:
             score  = fb.get("quality_score", "?")
             icon   = "✅" if status == "ok" else "❌"
             print(f"  {icon} [{task_type}] status={status} score={score}/10")
-            for issue in fb.get("issues", [])[:3]:   # chỉ in 3 issue đầu
+            for issue in fb.get("issues", [])[:3]:
                 print(f"     • {issue}")
 
+    # ── AUTO MODE: không hỏi, tự tiếp tục ───────────────────
+    if auto_mode:
+        log_step(iteration, "HUMAN GATE", "⚡ Auto mode — tự động tiếp tục")
+        return {
+            "status":            state.get("status", "running"),
+            "human_decision":    "continue",
+            "extra_requirement": state.get("extra_requirement", ""),
+            "history": [{"iteration": iteration, "node": "HUMAN GATE",
+                         "content": "auto_continue"}],
+        }
+
+    # ── MANUAL MODE: hỏi như cũ ─────────────────────────────
     print(f"\n{'─'*50}")
     print("  [Enter] → Tiếp tục | [s] → Dừng | [text] → Thêm yêu cầu")
     print(f"{'─'*50}")
@@ -58,6 +73,6 @@ def human_gate_node(state: AgentState) -> dict:
         "status":            status,
         "human_decision":    human_decision,
         "extra_requirement": extra_requirement,
-        # ← Chỉ entry MỚI, không get history cũ
-        "history": [{"iteration": iteration, "node": "HUMAN GATE", "content": human_decision}],
+        "history": [{"iteration": iteration, "node": "HUMAN GATE",
+                     "content": human_decision}],
     }

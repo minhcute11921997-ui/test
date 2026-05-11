@@ -8,6 +8,9 @@ class AgentState(TypedDict):
     iteration: int
     max_iterations: int
 
+    # ── Auto mode ─────────────────────────────────
+    auto_mode: bool          # ← THÊM: True = không hỏi lại ở human_gate
+
     # ── Plan ──────────────────────────────────────
     original_plan: dict
     current_plan: dict
@@ -36,8 +39,6 @@ class AgentState(TypedDict):
     status: str
 
     # ── Lịch sử (cho báo cáo) ────────────────────
-    # Dùng Annotated[list, add]: mỗi node chỉ trả về [entry_mới],
-    # LangGraph tự nối vào list tổng. KHÔNG get history cũ trong node.
     history: Annotated[list, add]
 
     # ── Context từ dự án ──────────────────────────
@@ -50,23 +51,24 @@ class AgentState(TypedDict):
     db_schemas: dict
 
     # ── Task types đang active ────────────────────
-    active_task_types: list  # ["UI","DB"] | ["UI","DB","API","AUTH"]
+    active_task_types: list
+
+    # ── Complexity ────────────────────────────────
+    complexity: str
 
     # ── Tester ────────────────────────────────────
-    # ── Complexity ────────────────────────────────────────────
-    complexity: str           # "simple" | "medium" | "complex" — đánh giá 1 lần, dùng lại
-
-    # ── Tester ────────────────────────────────────────────────
     test_results:       dict
     test_issues:        list
-    tester_retry_count: int   # ← đếm số lần tester→planner retry
+    tester_retry_count: int
 
 
-def create_initial_state(user_request: str) -> AgentState:
+def create_initial_state(user_request: str, auto_mode: bool = False) -> AgentState:
     return AgentState(
         user_request=user_request,
         iteration=0,
         max_iterations=5,
+
+        auto_mode=auto_mode,         # ← THÊM
 
         original_plan={},
         current_plan={},
@@ -103,7 +105,7 @@ def create_initial_state(user_request: str) -> AgentState:
         test_results       = {},
         test_issues        = [],
         tester_retry_count = 0,
-        complexity         = "",   # ← trống, planner sẽ đánh giá ở vòng 1
+        complexity         = "",
     )
 
 
