@@ -120,7 +120,7 @@ def _llm_review(code: str, task_type: str, task: dict = None) -> dict:
     code_preview = code[:3000]
     code_note    = f"\n... (truncated, {len(code) - 3000} more chars)" if len(code) > 3000 else ""
 
-        # ── Spec block từ task (nếu có) ──────────────────────────
+    # ── Spec block từ task (nếu có) ──────────────────────────
     spec_block = ""
     if task:
         required_fns  = task.get("required_functions", [])
@@ -308,14 +308,14 @@ def _print_review_result(task_type: str, feedback: dict):
           f"LLM: {feedback.get('llm_review', '?')} | "
           f"Score: {feedback.get('quality_score', '?')}/10")
 
-     # ── Hiển thị rubric chi tiết nếu có ──────────────────────
+    # ── Hiển thị rubric chi tiết nếu có ──────────────────────
     scores = feedback.get("scores", {})
     if scores:
         rubric_str = " | ".join(
             f"{k[:4]}={v}" for k, v in scores.items()
         )
         print(f"     📊 Rubric: {rubric_str}")
-        
+
     if feedback["issues"]:
         print(f"  ⚠️  Issues ({len(feedback['issues'])}):")
         for issue in feedback["issues"]:
