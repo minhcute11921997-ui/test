@@ -1,3 +1,4 @@
+# state.py
 from typing import TypedDict, Optional, Annotated
 from operator import add
 from config.pipeline_config import MAX_ITERATIONS
@@ -15,10 +16,11 @@ class _RequiredState(TypedDict):
 # ── Các field TUỲ CHỌN — chỉ có sau khi node tương ứng chạy ───────
 class _OptionalState(TypedDict, total=False):
     # Plan
-    original_plan:  dict
-    current_plan:   dict
-    complexity:     str
+    original_plan:     dict
+    current_plan:      dict
+    complexity:        str
     active_task_types: list
+    module_contracts:  dict        # ← THÊM MỚI
 
     # Code output
     code_ui:   str
@@ -68,10 +70,11 @@ def create_initial_state(user_request: str, auto_mode: bool = False) -> AgentSta
         iteration=0,
         max_iterations=MAX_ITERATIONS,
 
-        auto_mode=auto_mode,         # ← THÊM
+        auto_mode=auto_mode,
 
         original_plan={},
         current_plan={},
+        module_contracts={},       # ← THÊM MỚI
 
         code_ui="",
         code_db="",

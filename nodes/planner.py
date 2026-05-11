@@ -181,7 +181,7 @@ Rules for tasks:
                  "data_contract": {}, "acceptance_criteria": [], "edge_cases": []},
             ]
         }
-        log_step(iteration, "PLANNER", "⚠️ JSON lỗi — dùng fallback plan")
+    log_step(iteration, "PLANNER", "⚠️ JSON lỗi — dùng fallback plan")
 
     valid_tasks = [t for t in plan["tasks"] if t.get("type") in TASK_TYPES]
     if not valid_tasks:

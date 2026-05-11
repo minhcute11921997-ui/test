@@ -164,6 +164,7 @@ def _run_coder(state: AgentState, task_type: str) -> str:
         relevant_code    = relevant_code,
         context_summary  = state.get("context_summary", ""),
         timeout_issues   = my_timeout_issues,
+        module_contracts = state.get("module_contracts", {}),
     )
 
     # ── Gọi LLM với retry nếu syntax lỗi ────────────────────────────
