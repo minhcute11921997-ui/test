@@ -3,7 +3,6 @@ import ast
 import re
 import os
 from langchain_ollama import OllamaLLM
-from multi_agent_pipeline import state
 from state import AgentState
 from utils import log_step, save_code, clean_code
 from nodes.task_config import TASK_TYPES
